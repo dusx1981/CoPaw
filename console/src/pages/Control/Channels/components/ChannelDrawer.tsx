@@ -6,12 +6,20 @@ import {
   InputNumber,
   Switch,
   Button,
+  Select,
 } from "@agentscope-ai/design";
 import { LinkOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import type { FormInstance } from "antd";
 import { getChannelLabel, type ChannelKey } from "./constants";
 import styles from "../index.module.less";
+
+const CHANNELS_WITH_ACCESS_CONTROL: ChannelKey[] = [
+  "telegram",
+  "dingtalk",
+  "discord",
+  "feishu",
+];
 
 interface ChannelDrawerProps {
   open: boolean;
@@ -51,6 +59,49 @@ export function ChannelDrawer({
 }: ChannelDrawerProps) {
   const { t } = useTranslation();
   const label = activeKey ? getChannelLabel(activeKey) : activeLabel;
+
+  const renderAccessControlFields = () => (
+    <>
+      <Form.Item
+        name="dm_policy"
+        label={t("channels.dmPolicy")}
+        tooltip={t("channels.dmPolicyTooltip")}
+        initialValue="open"
+      >
+        <Select
+          options={[
+            { value: "open", label: t("channels.policyOpen") },
+            { value: "allowlist", label: t("channels.policyAllowlist") },
+          ]}
+        />
+      </Form.Item>
+      <Form.Item
+        name="group_policy"
+        label={t("channels.groupPolicy")}
+        tooltip={t("channels.groupPolicyTooltip")}
+        initialValue="open"
+      >
+        <Select
+          options={[
+            { value: "open", label: t("channels.policyOpen") },
+            { value: "allowlist", label: t("channels.policyAllowlist") },
+          ]}
+        />
+      </Form.Item>
+      <Form.Item
+        name="allow_from"
+        label={t("channels.allowFrom")}
+        tooltip={t("channels.allowFromTooltip")}
+        initialValue={[]}
+      >
+        <Select
+          mode="tags"
+          placeholder={t("channels.allowFromPlaceholder")}
+          tokenSeparators={[","]}
+        />
+      </Form.Item>
+    </>
+  );
 
   // Renders builtin channel-specific fields
   const renderBuiltinExtraFields = (key: ChannelKey) => {
@@ -228,6 +279,7 @@ export function ChannelDrawer({
       "enabled",
       "bot_prefix",
       "filter_tool_messages",
+      "filter_thinking",
       "isBuiltin",
     ];
     const extraKeys = Object.keys(initialValues).filter(
@@ -319,19 +371,32 @@ export function ChannelDrawer({
           )}
 
           {activeKey !== "console" && (
-            <Form.Item
-              name="filter_tool_messages"
-              label={t("channels.filterToolMessages")}
-              valuePropName="checked"
-              tooltip={t("channels.filterToolMessagesTooltip")}
-            >
-              <Switch />
-            </Form.Item>
+            <>
+              <Form.Item
+                name="filter_tool_messages"
+                label={t("channels.filterToolMessages")}
+                valuePropName="checked"
+                tooltip={t("channels.filterToolMessagesTooltip")}
+              >
+                <Switch />
+              </Form.Item>
+              <Form.Item
+                name="filter_thinking"
+                label={t("channels.filterThinking")}
+                valuePropName="checked"
+                tooltip={t("channels.filterThinkingTooltip")}
+              >
+                <Switch />
+              </Form.Item>
+            </>
           )}
 
           {isBuiltin
             ? renderBuiltinExtraFields(activeKey)
             : renderCustomExtraFields(initialValues)}
+
+          {CHANNELS_WITH_ACCESS_CONTROL.includes(activeKey) &&
+            renderAccessControlFields()}
 
           <Form.Item>
             <div className={styles.formActions}>

@@ -2,6 +2,10 @@ export interface BaseChannelConfig {
   enabled: boolean;
   bot_prefix: string;
   filter_tool_messages?: boolean;
+  filter_thinking?: boolean;
+  dm_policy?: "open" | "allowlist";
+  group_policy?: "open" | "allowlist";
+  allow_from?: string[];
 }
 
 export interface IMessageChannelConfig extends BaseChannelConfig {

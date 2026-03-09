@@ -89,12 +89,22 @@ class DingTalkChannel(BaseChannel):
         on_reply_sent: OnReplySent = None,
         show_tool_details: bool = True,
         filter_tool_messages: bool = False,
+        dm_policy: str = "open",
+        group_policy: str = "open",
+        allow_from: Optional[List[str]] = None,
+        deny_message: str = "",
+        filter_thinking: bool = False,
     ):
         super().__init__(
             process,
             on_reply_sent=on_reply_sent,
             show_tool_details=show_tool_details,
             filter_tool_messages=filter_tool_messages,
+            filter_thinking=filter_thinking,
+            dm_policy=dm_policy,
+            group_policy=group_policy,
+            allow_from=allow_from,
+            deny_message=deny_message,
         )
         self.enabled = enabled
         self.client_id = client_id
@@ -132,6 +142,12 @@ class DingTalkChannel(BaseChannel):
         process: ProcessHandler,
         on_reply_sent: OnReplySent = None,
     ) -> "DingTalkChannel":
+        allow_from_env = os.getenv("DINGTALK_ALLOW_FROM", "")
+        allow_from = (
+            [s.strip() for s in allow_from_env.split(",") if s.strip()]
+            if allow_from_env
+            else []
+        )
         return cls(
             process=process,
             enabled=os.getenv("DINGTALK_CHANNEL_ENABLED", "1") == "1",
@@ -140,6 +156,10 @@ class DingTalkChannel(BaseChannel):
             bot_prefix=os.getenv("DINGTALK_BOT_PREFIX", "[BOT] "),
             media_dir=os.getenv("DINGTALK_MEDIA_DIR", "~/.copaw/media"),
             on_reply_sent=on_reply_sent,
+            dm_policy=os.getenv("DINGTALK_DM_POLICY", "open"),
+            group_policy=os.getenv("DINGTALK_GROUP_POLICY", "open"),
+            allow_from=allow_from,
+            deny_message=os.getenv("DINGTALK_DENY_MESSAGE", ""),
         )
 
     @classmethod
@@ -150,6 +170,7 @@ class DingTalkChannel(BaseChannel):
         on_reply_sent: OnReplySent = None,
         show_tool_details: bool = True,
         filter_tool_messages: bool = False,
+        filter_thinking: bool = False,
     ) -> "DingTalkChannel":
         return cls(
             process=process,
@@ -161,6 +182,11 @@ class DingTalkChannel(BaseChannel):
             on_reply_sent=on_reply_sent,
             show_tool_details=show_tool_details,
             filter_tool_messages=filter_tool_messages,
+            dm_policy=config.dm_policy or "open",
+            group_policy=config.group_policy or "open",
+            allow_from=config.allow_from or [],
+            deny_message=config.deny_message or "",
+            filter_thinking=filter_thinking,
         )
 
     # ---------------------------
@@ -790,6 +816,24 @@ class DingTalkChannel(BaseChannel):
             part,
             default=default_name,
         )
+        # AudioContent URL is in part.data; derive filename/ext for m4a etc.
+        if ptype == ContentType.AUDIO:
+            data_attr = getattr(part, "data", None)
+            if isinstance(data_attr, str) and (
+                data_attr.startswith("http") or data_attr.startswith("file:")
+            ):
+                try:
+                    path = urlparse(data_attr).path
+                    base = os.path.basename(path)
+                    if base and "." in base:
+                        filename = base
+                        ext = base.rsplit(".", 1)[-1].lower()
+                except Exception:
+                    pass
+        if upload_type == "video" and ext not in ("mp4",):
+            upload_type = "file"
+        elif upload_type == "voice":
+            upload_type = "file"
 
         # ---------- if already has media id ----------
         # for file you used file_id;
@@ -821,7 +865,15 @@ class DingTalkChannel(BaseChannel):
                 )
 
             if upload_type == "voice":
-                payload = {"msgtype": "voice", "voice": {"mediaId": media_id}}
+                # sendBySession returns 400105 "unsupported msgtype" for voice.
+                payload = {
+                    "msgtype": "file",
+                    "file": {
+                        "mediaId": media_id,
+                        "fileType": ext,
+                        "fileName": filename,
+                    },
+                }
                 return await self._send_payload_via_session_webhook(
                     session_webhook,
                     payload,
@@ -886,6 +938,13 @@ class DingTalkChannel(BaseChannel):
             or getattr(part, "video_url", None)
             or ""
         )
+        # AudioContent stores URL in "data" (renderer _blocks_to_parts)
+        if not url and ptype == ContentType.AUDIO:
+            data_attr = getattr(part, "data", None)
+            if isinstance(data_attr, str) and (
+                data_attr.startswith("http") or data_attr.startswith("file:")
+            ):
+                url = data_attr
         url = (url or "").strip() if isinstance(url, str) else ""
         raw_b64 = None
         if (
@@ -925,7 +984,8 @@ class DingTalkChannel(BaseChannel):
 
         if not data:
             logger.warning(
-                "dingtalk media part: no data to upload, type=%s",
+                "dingtalk media part: no data to upload (empty file?), "
+                "type=%s",
                 ptype,
             )
             return False
@@ -957,7 +1017,15 @@ class DingTalkChannel(BaseChannel):
             )
 
         if upload_type == "voice":
-            payload = {"msgtype": "voice", "voice": {"mediaId": media_id}}
+            # sendBySession returns 400105 for voice; send as file.
+            payload = {
+                "msgtype": "file",
+                "file": {
+                    "mediaId": media_id,
+                    "fileType": ext,
+                    "fileName": filename,
+                },
+            }
             return await self._send_payload_via_session_webhook(
                 session_webhook,
                 payload,
@@ -965,10 +1033,12 @@ class DingTalkChannel(BaseChannel):
 
         if upload_type == "video":
             pic_media_id = (
-                part.get("pic_media_id") or part.get("picMediaId") or ""
+                getattr(part, "pic_media_id", None)
+                or getattr(part, "picMediaId", None)
+                or ""
             ).strip()
             if pic_media_id:
-                duration = part.get("duration")
+                duration = getattr(part, "duration", None)
                 if duration is None:
                     duration = 1
                 payload = {
@@ -1153,6 +1223,33 @@ class DingTalkChannel(BaseChannel):
     ) -> None:
         """Use webhook multi-message send instead of default loop."""
         del to_handle
+
+        sender_id = getattr(request, "user_id", "") or ""
+        is_group = bool((send_meta or {}).get("is_group", False))
+        allowed, error_msg = self._check_allowlist(
+            sender_id,
+            is_group,
+        )
+        if not allowed:
+            logger.info(
+                "dingtalk allowlist blocked: sender=%s is_group=%s",
+                sender_id,
+                is_group,
+            )
+            session_webhook = self._get_session_webhook(send_meta)
+            if session_webhook:
+                await self._send_via_session_webhook(
+                    session_webhook,
+                    self.bot_prefix + (error_msg or ""),
+                    bot_prefix="",
+                )
+            else:
+                self._reply_sync_batch(
+                    send_meta,
+                    self.bot_prefix + (error_msg or ""),
+                )
+            return
+
         logger.info(
             "dingtalk _run_process_loop: send_meta has_sw=%s "
             "req.channel_meta has_sw=%s",

@@ -10,6 +10,7 @@ Example:
 """
 
 
+import json
 import logging
 import os
 from typing import TYPE_CHECKING, Optional, Sequence, Tuple, Type, Any
@@ -28,6 +29,7 @@ except ImportError:  # pragma: no cover - compatibility fallback
     AnthropicChatModel = None
 
 from .utils.tool_message_utils import _sanitize_tool_messages
+from ..config.utils import load_config
 from ..local_models import create_local_chat_model
 from ..providers import (
     get_active_llm_config,
@@ -35,6 +37,17 @@ from ..providers import (
     get_provider_chat_model,
     load_providers_json,
 )
+
+
+def _file_url_to_path(url: str) -> str:
+    """
+    Strip file:// to path. On Windows file:///C:/path -> C:/path not /C:/path.
+    """
+    s = url.removeprefix("file://")
+    # Windows: file:///C:/path yields "/C:/path"; remove leading slash.
+    if len(s) >= 3 and s.startswith("/") and s[1].isalpha() and s[2] == ":":
+        s = s[1:]
+    return s
 
 
 def _monkey_patch(func):
@@ -57,19 +70,20 @@ def _monkey_patch(func):
                     ):
                         url = block["source"]["url"]
                         if url.startswith("file://"):
-                            block["source"]["url"] = url.removeprefix(
-                                "file://",
-                            )
+                            block["source"]["url"] = _file_url_to_path(url)
         return await func(self, msgs, **kwargs)
 
     return wrapper
 
 
-if agentscope.__version__ == "1.0.16dev":
+if agentscope.__version__ in ["1.0.16dev", "1.0.16"]:
     OpenAIChatFormatter.format = _monkey_patch(OpenAIChatFormatter.format)
 
 if TYPE_CHECKING:
+    from ..config.config import AgentsLLMRoutingConfig
+    from ..providers import ModelSlotConfig
     from ..providers import ResolvedModelConfig
+    from .routing_chat_model import RoutingEndpoint
 
 logger = logging.getLogger(__name__)
 
@@ -117,14 +131,68 @@ def _create_file_block_support_formatter(
     class FileBlockSupportFormatter(base_formatter_class):
         """Formatter with file block support for tool results."""
 
+        # pylint: disable=too-many-branches
         async def _format(self, msgs):
-            """Override to sanitize tool messages before formatting.
+            """Override to sanitize tool messages, handle thinking blocks,
+            and relay ``extra_content`` (Gemini thought_signature).
 
             This prevents OpenAI API errors from improperly paired
-            tool messages.
+            tool messages, preserves reasoning_content from "thinking"
+            blocks that the base formatter skips, and ensures
+            ``extra_content`` on tool_use blocks (e.g. Gemini
+            thought_signature) is carried through to the API request.
             """
             msgs = _sanitize_tool_messages(msgs)
+
+            reasoning_contents = {}
+            extra_contents: dict[str, Any] = {}
+            for msg in msgs:
+                if msg.role != "assistant":
+                    continue
+                for block in msg.get_content_blocks():
+                    if block.get("type") == "thinking":
+                        thinking = block.get("thinking", "")
+                        if thinking:
+                            reasoning_contents[id(msg)] = thinking
+                        break
+                for block in msg.get_content_blocks():
+                    if (
+                        block.get("type") == "tool_use"
+                        and "extra_content" in block
+                    ):
+                        extra_contents[block["id"]] = block["extra_content"]
+
             messages = await super()._format(msgs)
+
+            if extra_contents:
+                for message in messages:
+                    for tc in message.get("tool_calls", []):
+                        ec = extra_contents.get(tc.get("id"))
+                        if ec:
+                            tc["extra_content"] = ec
+
+            if reasoning_contents:
+                in_assistant = [m for m in msgs if m.role == "assistant"]
+                out_assistant = [
+                    m for m in messages if m.get("role") == "assistant"
+                ]
+                if len(in_assistant) != len(out_assistant):
+                    logger.warning(
+                        "Assistant message count mismatch after formatting "
+                        "(%d before, %d after). "
+                        "Skipping reasoning_content injection.",
+                        len(in_assistant),
+                        len(out_assistant),
+                    )
+                else:
+                    for in_msg, out_msg in zip(
+                        in_assistant,
+                        out_assistant,
+                    ):
+                        reasoning = reasoning_contents.get(id(in_msg))
+                        if reasoning:
+                            out_msg["reasoning_content"] = reasoning
+
             return _strip_top_level_message_name(messages)
 
         @staticmethod
@@ -217,6 +285,81 @@ def _strip_top_level_message_name(
     return messages
 
 
+def _resolve_routing_slot(
+    slot: "ModelSlotConfig",
+    *,
+    providers_data,
+) -> Optional[Tuple[str, "ResolvedModelConfig"]]:
+    from ..providers.store import _resolve_slot
+
+    llm_cfg = _resolve_slot(slot, providers_data)
+    if llm_cfg is None:
+        return None
+    return slot.provider_id, llm_cfg
+
+
+def _create_routing_endpoint(
+    provider_id: str,
+    llm_cfg: "ResolvedModelConfig",
+    *,
+    providers_data,
+) -> "RoutingEndpoint":
+    from .routing_chat_model import RoutingEndpoint
+
+    model, chat_model_class = _create_model_instance_for_provider(
+        llm_cfg,
+        provider_id,
+        providers_data=providers_data,
+    )
+    formatter = _create_formatter_instance(chat_model_class)
+    return RoutingEndpoint(
+        provider_id=provider_id,
+        model_name=llm_cfg.model,
+        model=model,
+        formatter=formatter,
+        formatter_family=_get_formatter_for_chat_model(chat_model_class),
+    )
+
+
+def _create_routing_model_and_formatter(
+    local_slot: "ModelSlotConfig",
+    cloud_slot: "ModelSlotConfig",
+    routing_cfg: "AgentsLLMRoutingConfig",
+    providers_data,
+) -> Optional[Tuple[ChatModelBase, FormatterBase]]:
+    from .routing_chat_model import RoutingChatModel
+
+    local_resolved = _resolve_routing_slot(
+        local_slot,
+        providers_data=providers_data,
+    )
+    cloud_resolved = _resolve_routing_slot(
+        cloud_slot,
+        providers_data=providers_data,
+    )
+    if local_resolved is None or cloud_resolved is None:
+        return None
+
+    local_endpoint = _create_routing_endpoint(
+        *local_resolved,
+        providers_data=providers_data,
+    )
+    cloud_endpoint = _create_routing_endpoint(
+        *cloud_resolved,
+        providers_data=providers_data,
+    )
+
+    if local_endpoint.formatter_family is not cloud_endpoint.formatter_family:
+        return None
+
+    model: ChatModelBase = RoutingChatModel(
+        local_endpoint=local_endpoint,
+        cloud_endpoint=cloud_endpoint,
+        routing_cfg=routing_cfg,
+    )
+    return model, local_endpoint.formatter
+
+
 def create_model_and_formatter(
     llm_cfg: Optional["ResolvedModelConfig"] = None,
 ) -> Tuple[ChatModelBase, FormatterBase]:
@@ -239,8 +382,30 @@ def create_model_and_formatter(
         >>> custom_cfg = get_active_llm_config()
         >>> model, formatter = create_model_and_formatter(custom_cfg)
     """
-    # Fetch config if not provided
     if llm_cfg is None:
+        routing_cfg = load_config().agents.llm_routing
+        providers_data = load_providers_json()
+        cloud_slot = (
+            routing_cfg.cloud
+            if routing_cfg.cloud is not None
+            else providers_data.active_llm
+        )
+        if (
+            routing_cfg.enabled
+            and routing_cfg.local.provider_id
+            and routing_cfg.local.model
+            and cloud_slot.provider_id
+            and cloud_slot.model
+        ):
+            routed_model = _create_routing_model_and_formatter(
+                routing_cfg.local,
+                cloud_slot,
+                routing_cfg,
+                providers_data,
+            )
+            if routed_model is not None:
+                return routed_model
+
         llm_cfg = get_active_llm_config()
 
     # Create the model instance and determine chat model class
@@ -280,6 +445,41 @@ def _create_model_instance(
     model = _create_remote_model_instance(llm_cfg, chat_model_class)
 
     return model, chat_model_class
+
+
+def _create_model_instance_for_provider(
+    llm_cfg: Optional["ResolvedModelConfig"],
+    provider_id: str,
+    *,
+    providers_data,
+) -> Tuple[ChatModelBase, Type[ChatModelBase]]:
+    """Create a model instance using an explicit provider identifier."""
+    if llm_cfg and llm_cfg.is_local:
+        return _create_model_instance(llm_cfg)
+
+    chat_model_class = _get_chat_model_class_for_provider(
+        provider_id,
+        providers_data=providers_data,
+    )
+    model = _create_remote_model_instance(llm_cfg, chat_model_class)
+    return model, chat_model_class
+
+
+def _get_chat_model_class_for_provider(
+    provider_id: str,
+    *,
+    providers_data,
+) -> Type[ChatModelBase]:
+    """Get the chat model class for a specific provider identifier."""
+    chat_model_class = get_chat_model_class("OpenAIChatModel")
+    if not provider_id:
+        return chat_model_class
+
+    chat_model_name = get_provider_chat_model(
+        provider_id,
+        providers_data,
+    )
+    return get_chat_model_class(chat_model_name)
 
 
 def _get_chat_model_class_from_provider() -> Type[ChatModelBase]:
@@ -347,12 +547,32 @@ def _create_remote_model_instance(
         if base_url.endswith("/v1"):
             base_url = base_url[:-3]
 
+    dashscope_base_urls = [
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "https://coding.dashscope.aliyuncs.com/v1",
+    ]
+
+    client_kwargs = {"base_url": base_url}
+
+    if base_url in dashscope_base_urls:
+        client_kwargs["default_headers"] = {
+            "x-dashscope-agentapp": json.dumps(
+                {
+                    "agentType": "CoPaw",
+                    "deployType": "UnKnown",
+                    "moduleCode": "model",
+                    "agentCode": "UnKnown",
+                },
+                ensure_ascii=False,
+            ),
+        }
+
     # Instantiate model
     model = chat_model_class(
         model_name,
         api_key=api_key,
         stream=True,
-        client_kwargs={"base_url": base_url},
+        client_kwargs=client_kwargs,
     )
 
     return model

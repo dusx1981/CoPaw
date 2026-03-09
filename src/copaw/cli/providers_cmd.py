@@ -12,6 +12,7 @@ from ..providers import (
     add_model,
     create_custom_provider,
     delete_custom_provider,
+    get_provider,
     is_builtin,
     list_providers,
     load_providers_json,
@@ -62,7 +63,22 @@ def configure_provider_api_key_interactive(
             "Select provider to configure API key:",
         )
 
-    defn = PROVIDERS[provider_id]
+    defn = get_provider(provider_id)
+    if defn is None:
+        available = ", ".join(d.id for d in list_providers())
+        click.echo(
+            click.style(
+                f"Error: unknown provider '{provider_id}'. "
+                f"Available providers: {available}",
+                fg="red",
+            ),
+        )
+        click.echo(
+            "To add a custom provider, first run:\n"
+            f"  copaw models add-provider {provider_id} "
+            f'-n "My Provider"',
+        )
+        raise SystemExit(1)
 
     # Local providers (llamacpp, mlx) don't need API key configuration
     if defn.is_local:
