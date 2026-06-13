@@ -1,2 +1,2 @@
 export { MCPClientCard } from "./MCPClientCard";
-export { MCPClientDrawer } from "./MCPClientDrawer";
+export { MCPOAuthSection, OAuthToggleRow } from "./MCPOAuthSection";

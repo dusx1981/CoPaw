@@ -1,13 +1,18 @@
 import { useAgentsData, FileListPanel, FileEditor } from "./components";
 import styles from "./index.module.less";
 import { UploadOutlined, DownloadOutlined } from "@ant-design/icons";
-import { Button, Tooltip, message } from "@agentscope-ai/design";
+import { Button, Tooltip } from "@agentscope-ai/design";
 import { workspaceApi } from "../../../api/modules/workspace";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { PageHeader } from "@/components/PageHeader";
+import { useAppMessage } from "../../../hooks/useAppMessage";
+import { useUploadLimitStore } from "../../../stores/uploadLimitStore";
+import { DownloadCancelledError } from "../../../utils/downloadFileFromUrl";
 
 export default function WorkspacePage() {
   const { t } = useTranslation();
+  const { message } = useAppMessage();
   const {
     files,
     selectedFile,
@@ -17,33 +22,47 @@ export default function WorkspacePage() {
     loading,
     workspacePath,
     hasChanges,
+    enabledFiles,
     setFileContent,
     fetchFiles,
     handleFileClick,
     handleDailyMemoryClick,
     handleSave,
     handleReset,
+    handleToggleFileEnabled,
+    handleReorderFiles,
   } = useAgentsData();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [downloading, setDownloading] = useState(false);
 
   const handleDownload = async () => {
+    if (downloading) return;
+    setDownloading(true);
+    message.loading({
+      content: t("workspace.downloadPreparing"),
+      key: "workspace-download",
+      duration: 0,
+    });
     try {
-      const blob = await workspaceApi.downloadWorkspace();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `workspace-${new Date().toISOString().split("T")[0]}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      message.success(t("workspace.downloadSuccess"));
+      await workspaceApi.downloadWorkspace();
+      message.success({
+        content: t("workspace.downloadSuccess"),
+        key: "workspace-download",
+      });
     } catch (error) {
+      if (error instanceof DownloadCancelledError) {
+        message.destroy("workspace-download");
+        return;
+      }
       console.error("Download failed:", error);
-      message.error(
-        t("workspace.downloadFailed") + ": " + (error as Error).message,
-      );
+      message.error({
+        content:
+          t("workspace.downloadFailed") + ": " + (error as Error).message,
+        key: "workspace-download",
+      });
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -62,10 +81,11 @@ export default function WorkspacePage() {
       return;
     }
 
-    const maxSize = 100 * 1024 * 1024;
-    if (file.size > maxSize) {
+    const uploadLimit = useUploadLimitStore.getState().uploadMaxSizeMb;
+    if (uploadLimit !== null && file.size > uploadLimit * 1024 * 1024) {
       message.error(
         t("workspace.fileSizeExceeded", {
+          limit: uploadLimit,
           size: (file.size / (1024 * 1024)).toFixed(2),
         }),
       );
@@ -100,41 +120,60 @@ export default function WorkspacePage() {
   };
 
   return (
-    <div className={styles.agentsPage}>
-      <div className={styles.header}>
-        <h1 className={styles.title}>{t("workspace.title")}</h1>
-        <div className={styles.workspaceInfo}>
+    <div className={styles.workspacePage}>
+      <PageHeader
+        items={[{ title: t("nav.agent") }, { title: t("workspace.title") }]}
+        afterBreadcrumb={
           <p className={styles.workspacePath}>
             {t("workspace.workspacePath")}{" "}
-            {workspacePath ||
-              (files.length === 0
-                ? t("workspace.noFiles")
-                : t("common.loading"))}
+            {workspacePath === null
+              ? t("common.loading")
+              : workspacePath || t("workspace.noFiles")}
           </p>
-          <div className={styles.actionButtons}>
-            <Tooltip
-              title={t("workspace.uploadTooltip")}
-              placement="top"
-              mouseEnterDelay={0.5}
-            >
+        }
+        extra={
+          <div className={styles.workspaceInfo}>
+            <div className={styles.actionButtons}>
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileUpload}
+                style={{ display: "none" }}
+                accept=".zip"
+                title=""
+              />
+              <Tooltip
+                title={`${t("workspace.coreFilesDesc")} (${
+                  useUploadLimitStore.getState().uploadMaxSizeMb !== null
+                    ? t("workspace.uploadTooltipWithLimit", {
+                        limit: useUploadLimitStore.getState().uploadMaxSizeMb,
+                      })
+                    : t("workspace.uploadTooltip")
+                })`}
+                placement="top"
+                mouseEnterDelay={0.5}
+              >
+                <Button
+                  size="small"
+                  onClick={handleUploadClick}
+                  icon={<UploadOutlined />}
+                >
+                  {t("common.upload")}
+                </Button>
+              </Tooltip>
               <Button
                 size="small"
-                onClick={handleUploadClick}
-                icon={<UploadOutlined />}
+                onClick={handleDownload}
+                loading={downloading}
+                disabled={downloading}
+                icon={<DownloadOutlined />}
               >
-                {t("common.upload")}
+                {t("common.download")}
               </Button>
-            </Tooltip>
-            <Button
-              size="small"
-              onClick={handleDownload}
-              icon={<DownloadOutlined />}
-            >
-              {t("common.download")}
-            </Button>
+            </div>
           </div>
-        </div>
-      </div>
+        }
+      />
 
       <div className={styles.content}>
         <FileListPanel
@@ -143,9 +182,12 @@ export default function WorkspacePage() {
           dailyMemories={dailyMemories}
           expandedMemory={expandedMemory}
           workspacePath={workspacePath}
+          enabledFiles={enabledFiles}
           onRefresh={fetchFiles}
           onFileClick={handleFileClick}
           onDailyMemoryClick={handleDailyMemoryClick}
+          onToggleEnabled={handleToggleFileEnabled}
+          onReorder={handleReorderFiles}
         />
 
         <FileEditor
@@ -158,18 +200,6 @@ export default function WorkspacePage() {
           onReset={handleReset}
         />
       </div>
-
-      <p className={styles.attribution}>{t("workspace.attribution")}</p>
-
-      {/* Hidden file input - only accepts .zip files up to 100MB */}
-      <input
-        type="file"
-        ref={fileInputRef}
-        onChange={handleFileUpload}
-        style={{ display: "none" }}
-        accept=".zip"
-        title="Select a ZIP file (max 100MB)"
-      />
     </div>
   );
 }

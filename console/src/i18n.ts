@@ -4,6 +4,8 @@ import en from "./locales/en.json";
 import ru from "./locales/ru.json";
 import zh from "./locales/zh.json";
 import ja from "./locales/ja.json";
+import ptBR from "./locales/pt-BR.json";
+import id from "./locales/id.json";
 const resources = {
   en: {
     translation: en,
@@ -17,12 +19,20 @@ const resources = {
   ja: {
     translation: ja,
   },
+  "pt-BR": {
+    translation: ptBR,
+  },
+  id: {
+    translation: id,
+  },
 };
 
 i18n.use(initReactI18next).init({
   resources,
-  lng: localStorage.getItem("language") || "en",
+  lng: localStorage.getItem("language") || navigator.language || "en",
   fallbackLng: "en",
+  supportedLngs: Object.keys(resources),
+  nonExplicitSupportedLngs: true,
   interpolation: {
     escapeValue: false,
   },

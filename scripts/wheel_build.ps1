@@ -6,7 +6,7 @@ $RepoRoot = (Get-Item $PSScriptRoot).Parent.FullName
 Set-Location $RepoRoot
 
 $ConsoleDir = Join-Path $RepoRoot "console"
-$ConsoleDest = Join-Path $RepoRoot "src\copaw\console"
+$ConsoleDest = Join-Path $RepoRoot "src\qwenpaw\console"
 
 Write-Host "[wheel_build] Building console frontend..."
 Push-Location $ConsoleDir
@@ -19,7 +19,7 @@ try {
   Pop-Location
 }
 
-Write-Host "[wheel_build] Copying console/dist/* -> src/copaw/console/..."
+Write-Host "[wheel_build] Copying console/dist/* -> src/qwenpaw/console/..."
 if (Test-Path $ConsoleDest) {
   Remove-Item -Path (Join-Path $ConsoleDest "*") -Recurse -Force -ErrorAction SilentlyContinue
 } else {
@@ -27,6 +27,13 @@ if (Test-Path $ConsoleDest) {
 }
 $ConsoleDist = Join-Path $ConsoleDir "dist"
 Copy-Item -Path (Join-Path $ConsoleDist "*") -Destination $ConsoleDest -Recurse -Force
+
+Write-Host "[wheel_build] Bundling website docs into package..."
+$DocsSrc = Join-Path $RepoRoot "website\public\docs"
+$DocsDest = Join-Path $RepoRoot "src\qwenpaw\docs"
+if (Test-Path $DocsDest) { Remove-Item -Recurse -Force $DocsDest }
+New-Item -ItemType Directory -Force -Path $DocsDest | Out-Null
+Copy-Item -Path (Join-Path $DocsSrc "*.md") -Destination $DocsDest -Force
 
 Write-Host "[wheel_build] Building wheel + sdist..."
 python -m pip install --quiet build

@@ -1,461 +1,482 @@
-import {
-  Layout,
-  Menu,
-  Button,
-  Badge,
-  Modal,
-  Spin,
-  Tooltip,
-  type MenuProps,
-} from "antd";
-import { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { Layout, Menu, Button, Modal, Input, Form, Tooltip, Badge } from "antd";
+import { useState, useEffect, useMemo } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useAppMessage } from "../hooks/useAppMessage";
+import AgentSelector from "../components/AgentSelector";
 import {
-  MessageSquare,
-  Radio,
-  Zap,
-  MessageCircle,
-  Wifi,
-  UsersRound,
-  CalendarClock,
-  Activity,
-  Sparkles,
-  Briefcase,
-  Cpu,
-  Box,
-  Globe,
-  Settings,
-  Plug,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Copy,
-  Check,
-} from "lucide-react";
+  SparkChatTabFill,
+  SparkExitFullscreenLine,
+  SparkSearchUserLine,
+  SparkMenuExpandLine,
+  SparkMenuFoldLine,
+  SparkEmailLine,
+} from "@agentscope-ai/icons";
+import { clearAuthToken } from "../api/config";
+import { authApi } from "../api/modules/auth";
 import api from "../api";
+import { useCodingMode } from "../stores/codingModeStore";
+import { buildSessionPath, getSessionIdFromPath } from "../utils/sessionRoute";
 import styles from "./index.module.less";
+import { useTheme } from "../contexts/ThemeContext";
+import { useMenuItems, useRoutes } from "../plugins/registry/hooks";
+import { Slot } from "../plugins/registry/Slot";
+import {
+  deriveOpenKeys,
+  findMenuItem,
+  flattenMenu,
+  renderIcon,
+  routeIdToPath,
+  toAntdItems,
+} from "./registry/adapter";
+import type { FlatMenuEntry } from "./registry/adapter";
+import type { MenuItem } from "../plugins/registry/types";
+import type { ReactNode } from "react";
+
+// ── Layout ────────────────────────────────────────────────────────────────
 
 const { Sider } = Layout;
+const MOBILE_SIDEBAR_QUERY = "(max-width: 768px)";
 
-const PYPI_URL = "https://pypi.org/pypi/copaw/json";
+function isMobileSidebarViewport() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(MOBILE_SIDEBAR_QUERY).matches
+  );
+}
+const INBOX_BADGE_POLLING_MS = 6000;
 
-const DEFAULT_OPEN_KEYS = [
-  "chat-group",
-  "control-group",
-  "agent-group",
-  "settings-group",
-];
-
-const KEY_TO_PATH: Record<string, string> = {
-  chat: "/chat",
-  channels: "/channels",
-  sessions: "/sessions",
-  "cron-jobs": "/cron-jobs",
-  heartbeat: "/heartbeat",
-  skills: "/skills",
-  mcp: "/mcp",
-  workspace: "/workspace",
-  models: "/models",
-  environments: "/environments",
-  "agent-config": "/agent-config",
-};
-
-const UPDATE_MD: Record<string, string> = {
-  zh: `### CoPaw如何更新
-
-要更新 CoPaw 到最新版本，可根据你的安装方式选择对应方法：
-
-1. 如果你使用的是一键安装脚本，直接重新运行安装命令即可自动升级。
-
-2. 如果你是通过 pip 安装，在终端中执行以下命令升级：
-
-\`\`\`
-pip install --upgrade copaw
-\`\`\`
-
-3. 如果你是从源码安装，进入项目目录并拉取最新代码后重新安装：
-
-\`\`\`
-cd CoPaw
-git pull origin main
-pip install -e .
-\`\`\`
-
-4. 如果你使用的是 Docker，拉取最新镜像并重启容器：
-
-\`\`\`
-docker pull agentscope/copaw:latest
-docker run -p 127.0.0.1:8088:8088 -v copaw-data:/app/working agentscope/copaw:latest
-\`\`\`
-
-升级后重启服务 copaw app。`,
-
-  ru: `### Как обновить CoPaw
-
-Чтобы обновить CoPaw, выберите способ в зависимости от типа установки:
-
-1. Если вы устанавливали через однострочный скрипт, повторно запустите установщик для обновления.
-
-2. Если устанавливали через pip, выполните:
-
-\`\`\`
-pip install --upgrade copaw
-\`\`\`
-
-3. Если устанавливали из исходников, получите последние изменения и переустановите:
-
-\`\`\`
-cd CoPaw
-git pull origin main
-pip install -e .
-\`\`\`
-
-4. Если используете Docker, загрузите новый образ и перезапустите контейнер:
-
-\`\`\`
-docker pull agentscope/copaw:latest
-docker run -p 127.0.0.1:8088:8088 -v copaw-data:/app/working agentscope/copaw:latest
-\`\`\`
-
-После обновления перезапустите сервис с помощью \`copaw app\`.`,
-
-  en: `### How to update CoPaw
-
-To update CoPaw, use the method matching your installation type:
-
-1. If installed via one-line script, re-run the installer to upgrade.
-
-2. If installed via pip, run:
-
-\`\`\`
-pip install --upgrade copaw
-\`\`\`
-
-3. If installed from source, pull the latest code and reinstall:
-
-\`\`\`
-cd CoPaw
-git pull origin main
-pip install -e .
-\`\`\`
-
-4. If using Docker, pull the latest image and restart the container:
-
-\`\`\`
-docker pull agentscope/copaw:latest
-docker run -p 127.0.0.1:8088:8088 -v copaw-data:/app/working agentscope/copaw:latest
-\`\`\`
-
-After upgrading, restart the service with \`copaw app\`.`,
-};
+// ── Types ─────────────────────────────────────────────────────────────────
 
 interface SidebarProps {
+  /** Route id of the currently active page (e.g. "core.workspace"). */
   selectedKey: string;
 }
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const { t } = useTranslation();
-
-  const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }, [text]);
-
-  return (
-    <Tooltip
-      title={copied ? t("common.copied", "Copied!") : t("common.copy", "Copy")}
-    >
-      <Button
-        type="text"
-        size="small"
-        icon={copied ? <Check size={13} /> : <Copy size={13} />}
-        onClick={handleCopy}
-        className={`${styles.copyBtn} ${
-          copied ? styles.copyBtnCopied : styles.copyBtnDefault
-        }`}
-      />
-    </Tooltip>
-  );
-}
+// ── Sidebar ───────────────────────────────────────────────────────────────
 
 export default function Sidebar({ selectedKey }: SidebarProps) {
   const navigate = useNavigate();
-  const { t, i18n } = useTranslation();
+  const location = useLocation();
+  const { t } = useTranslation();
+  const { message } = useAppMessage();
+  const { isDark } = useTheme();
+  // When coding mode is on, the sidebar "Chat" entry should land on /coding
+  // (FileTree + Editor + Chat panel) rather than the bare Chat page.
+  const { codingMode } = useCodingMode();
+  const currentSessionId = getSessionIdFromPath(location.pathname);
+  const chatPath = buildSessionPath(
+    codingMode ? "coding" : "chat",
+    currentSessionId,
+  );
+  const [authEnabled, setAuthEnabled] = useState(false);
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const [accountLoading, setAccountLoading] = useState(false);
+  const [accountForm] = Form.useForm();
   const [collapsed, setCollapsed] = useState(false);
-  const [openKeys, setOpenKeys] = useState<string[]>(DEFAULT_OPEN_KEYS);
-  const [version, setVersion] = useState<string>("");
-  const [latestVersion, setLatestVersion] = useState<string>("");
-  const [allVersions, setAllVersions] = useState<string[]>([]);
-  const [updateModalOpen, setUpdateModalOpen] = useState(false);
-  const [updateMarkdown, setUpdateMarkdown] = useState<string>("");
+  const [isMobile, setIsMobile] = useState(isMobileSidebarViewport);
+  const [hasInboxUnread, setHasInboxUnread] = useState(false);
+
+  // Menu + route snapshots from registry (builtin + plugin registrations merged).
+  const agentMenu = useMenuItems("primary.agentScoped");
+  const settingsMenu = useMenuItems("primary.settings");
+  const routes = useRoutes();
+
+  // ── Effects ──────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (!collapsed) {
-      setOpenKeys(DEFAULT_OPEN_KEYS);
+    authApi
+      .getStatus()
+      .then((res) => setAuthEnabled(res.enabled))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      typeof window.matchMedia !== "function"
+    ) {
+      return;
     }
-  }, [collapsed]);
 
+    const mediaQuery = window.matchMedia(MOBILE_SIDEBAR_QUERY);
+    const syncMobileSidebar = () => {
+      setIsMobile(mediaQuery.matches);
+      if (mediaQuery.matches) {
+        setCollapsed(true);
+      }
+    };
+
+    syncMobileSidebar();
+    mediaQuery.addEventListener("change", syncMobileSidebar);
+
+    return () => {
+      mediaQuery.removeEventListener("change", syncMobileSidebar);
+    };
+  }, []);
   useEffect(() => {
-    api
-      .getVersion()
-      .then((res) => setVersion(res?.version ?? ""))
-      .catch(() => {});
+    const loadUnreadState = async () => {
+      try {
+        const [inboxRes, pushRes] = await Promise.all([
+          api.getInboxEvents({
+            unread_only: true,
+            limit: 1,
+          }),
+          api.getPushMessages(),
+        ]);
+        const hasUnreadEvents = (inboxRes?.events?.length || 0) > 0;
+        const hasPendingApprovals =
+          (pushRes?.pending_approvals?.length || 0) > 0;
+        setHasInboxUnread(hasUnreadEvents || hasPendingApprovals);
+      } catch {
+        // Keep previous state when polling fails.
+      }
+    };
+    void loadUnreadState();
+    const timer = window.setInterval(() => {
+      void loadUnreadState();
+    }, INBOX_BADGE_POLLING_MS);
+    return () => window.clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    fetch(PYPI_URL)
-      .then((res) => res.json())
-      .then((data) => {
-        const releases = data?.releases ?? {};
-        // Sort versions by upload_time (newest first)
-        const versionsWithTime = Object.entries(releases).map(
-          ([version, files]) => {
-            const fileList = files as Array<{ upload_time_iso_8601?: string }>;
-            // Get the latest upload time among all files for this version
-            const latestUpload = fileList
-              .map((f) => f.upload_time_iso_8601)
-              .filter(Boolean)
-              .sort()
-              .pop();
-            return { version, uploadTime: latestUpload || "" };
-          },
-        );
-        versionsWithTime.sort(
-          (a, b) =>
-            new Date(b.uploadTime).getTime() - new Date(a.uploadTime).getTime(),
-        );
-        const versions = versionsWithTime.map((v) => v.version);
-        const latest = versions[0] ?? data?.info?.version ?? "";
-        setAllVersions(versions);
-        setLatestVersion(latest);
-      })
-      .catch(() => {});
-  }, []);
+  // ── Adapter: convert MenuItem trees to antd, with inbox badge decoration.
 
-  const hasUpdate =
-    version &&
-    allVersions.length > 0 &&
-    allVersions.includes(version) &&
-    version !== latestVersion;
-
-  const handleOpenUpdateModal = () => {
-    setUpdateMarkdown("");
-    setUpdateModalOpen(true);
-    const lang = i18n.language?.startsWith("zh")
-      ? "zh"
-      : i18n.language?.startsWith("ru")
-      ? "ru"
-      : "en";
-    const faqLang = lang === "zh" ? "zh" : "en";
-    const url = `https://copaw.agentscope.io/docs/faq.${faqLang}.md`;
-    fetch(url, { cache: "no-cache" })
-      .then((res) => (res.ok ? res.text() : Promise.reject()))
-      .then((text) => {
-        const zhPattern = /###\s*CoPaw如何更新[\s\S]*?(?=\n###|$)/;
-        const enPattern = /###\s*How to update CoPaw[\s\S]*?(?=\n###|$)/;
-        const match = text.match(faqLang === "zh" ? zhPattern : enPattern);
-        setUpdateMarkdown(
-          match && lang !== "ru"
-            ? match[0].trim()
-            : UPDATE_MD[lang] ?? UPDATE_MD.en,
-        );
-      })
-      .catch(() => {
-        setUpdateMarkdown(UPDATE_MD[lang] ?? UPDATE_MD.en);
-      });
+  /** Wrap the inbox label with the unread-Badge while keeping all other labels intact. */
+  const decorateLabel = (item: MenuItem, label: ReactNode): ReactNode => {
+    if (item.id !== "core.inbox" || label == null) return label;
+    return (
+      <Badge dot={hasInboxUnread} color="rgba(255, 157, 77, 1)" offset={[5, 7]}>
+        <span>{label}</span>
+      </Badge>
+    );
   };
 
-  const menuItems: MenuProps["items"] = [
-    {
-      key: "chat-group",
+  const agentMenuItems = useMemo(
+    () => toAntdItems(agentMenu, { collapsed, decorateLabel }),
+    // hasInboxUnread closure inside decorateLabel — listed as dep explicitly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [agentMenu, collapsed, hasInboxUnread],
+  );
+
+  const settingsMenuItems = useMemo(
+    () => toAntdItems(settingsMenu, { collapsed }),
+    [settingsMenu, collapsed],
+  );
+
+  const openKeys = useMemo(
+    () => [...deriveOpenKeys(agentMenu), ...deriveOpenKeys(settingsMenu)],
+    [agentMenu, settingsMenu],
+  );
+
+  const collapsedNavItems = useMemo(() => {
+    // Sticky chat is its own carve-out (lives outside menu data — see builtinMenu.ts).
+    const stickyChat: FlatMenuEntry = {
+      key: "core.chat",
+      icon: <SparkChatTabFill size={18} />,
+      path: chatPath,
       label: t("nav.chat"),
-      icon: <MessageSquare size={16} />,
-      children: [
-        {
-          key: "chat",
-          label: t("nav.chat"),
-          icon: <MessageCircle size={16} />,
-        },
-      ],
-    },
-    {
-      key: "control-group",
-      label: t("nav.control"),
-      icon: <Radio size={16} />,
-      children: [
-        { key: "channels", label: t("nav.channels"), icon: <Wifi size={16} /> },
-        {
-          key: "sessions",
-          label: t("nav.sessions"),
-          icon: <UsersRound size={16} />,
-        },
-        {
-          key: "cron-jobs",
-          label: t("nav.cronJobs"),
-          icon: <CalendarClock size={16} />,
-        },
-        {
-          key: "heartbeat",
-          label: t("nav.heartbeat"),
-          icon: <Activity size={16} />,
-        },
-      ],
-    },
-    {
-      key: "agent-group",
-      label: t("nav.agent"),
-      icon: <Zap size={16} />,
-      children: [
-        {
-          key: "workspace",
-          label: t("nav.workspace"),
-          icon: <Briefcase size={16} />,
-        },
-        { key: "skills", label: t("nav.skills"), icon: <Sparkles size={16} /> },
-        { key: "mcp", label: t("nav.mcp"), icon: <Plug size={16} /> },
-        {
-          key: "agent-config",
-          label: t("nav.agentConfig"),
-          icon: <Settings size={16} />,
-        },
-      ],
-    },
-    {
-      key: "settings-group",
-      label: t("nav.settings"),
-      icon: <Cpu size={16} />,
-      children: [
-        { key: "models", label: t("nav.models"), icon: <Box size={16} /> },
-        {
-          key: "environments",
-          label: t("nav.environments"),
-          icon: <Globe size={16} />,
-        },
-      ],
-    },
-  ];
+    };
+    // Inbox in collapsed mode shows a dot overlay on its icon (kept Sidebar-local
+    // for the same reason as decorateLabel: live state isn't menu data).
+    const decorateInboxIcon = (icon: ReactNode): ReactNode => (
+      <span style={{ position: "relative", display: "inline-flex" }}>
+        {icon ?? <SparkEmailLine size={18} />}
+        {hasInboxUnread && (
+          <span
+            style={{
+              position: "absolute",
+              top: -1,
+              right: -3,
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              background: "rgba(255, 157, 77, 1)",
+            }}
+          />
+        )}
+      </span>
+    );
+    const flat = [
+      stickyChat,
+      ...flattenMenu(agentMenu, routes, 18),
+      ...flattenMenu(settingsMenu, routes, 18),
+    ];
+    return flat.map((entry) =>
+      entry.key === "core.inbox"
+        ? { ...entry, icon: decorateInboxIcon(entry.icon) }
+        : entry,
+    );
+  }, [agentMenu, settingsMenu, routes, chatPath, t, hasInboxUnread]);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+
+  const handleMenuClick = (key: string, allItems: MenuItem[]) => {
+    const item = findMenuItem(allItems, key);
+    if (item?.href) {
+      window.open(item.href, "_blank", "noopener,noreferrer");
+      return;
+    }
+    const path = routeIdToPath(item?.route, routes);
+    if (path) navigate(path);
+  };
+
+  const handleUpdateProfile = async (values: {
+    currentPassword: string;
+    newUsername?: string;
+    newPassword?: string;
+  }) => {
+    const trimmedUsername = values.newUsername?.trim() || undefined;
+    const trimmedPassword = values.newPassword?.trim() || undefined;
+
+    if (values.newPassword && !trimmedPassword) {
+      message.error(t("account.passwordEmpty"));
+      return;
+    }
+
+    if (values.newUsername && !trimmedUsername) {
+      message.error(t("account.usernameEmpty"));
+      return;
+    }
+
+    if (!trimmedUsername && !trimmedPassword) {
+      message.warning(t("account.nothingToUpdate"));
+      return;
+    }
+
+    setAccountLoading(true);
+    try {
+      await authApi.updateProfile(
+        values.currentPassword,
+        trimmedUsername,
+        trimmedPassword,
+      );
+      message.success(t("account.updateSuccess"));
+      setAccountModalOpen(false);
+      accountForm.resetFields();
+      clearAuthToken();
+      window.location.href = "/login";
+    } catch (err: unknown) {
+      const raw = err instanceof Error ? err.message : "";
+      let msg = t("account.updateFailed");
+      if (raw.includes("password is incorrect")) {
+        msg = t("account.wrongPassword");
+      } else if (raw.includes("Nothing to update")) {
+        msg = t("account.nothingToUpdate");
+      } else if (raw.includes("cannot be empty")) {
+        msg = t("account.nothingToUpdate");
+      } else if (raw) {
+        msg = raw;
+      }
+      message.error(msg);
+    } finally {
+      setAccountLoading(false);
+    }
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  const siderWidth = collapsed ? (isMobile ? 56 : 72) : 240;
+  // Sticky chat is active when on /chat* or /coding routes.
+  const isChatActive =
+    selectedKey === "core.chat" || selectedKey === "core.coding";
+  // `renderIcon` retained for tree-shaking awareness.
+  void renderIcon;
 
   return (
     <Sider
-      collapsed={collapsed}
-      onCollapse={setCollapsed}
-      width={275}
-      className={styles.sider}
+      width={siderWidth}
+      className={`${styles.sider}${
+        collapsed ? ` ${styles.siderCollapsed}` : ""
+      }${isDark ? ` ${styles.siderDark}` : ""}`}
     >
-      <div className={styles.siderTop}>
-        {!collapsed && (
-          <div className={styles.logoWrapper}>
-            <img src="/logo.png" alt="CoPaw" className={styles.logoImg} />
-            {version && (
-              <Badge dot={!!hasUpdate} color="red" offset={[4, 18]}>
-                <span
-                  className={`${styles.versionBadge} ${
-                    hasUpdate
-                      ? styles.versionBadgeClickable
-                      : styles.versionBadgeDefault
+      {collapsed ? (
+        <nav className={styles.collapsedNav}>
+          {collapsedNavItems.map((item) => {
+            const isActive =
+              item.key === "core.chat"
+                ? isChatActive
+                : selectedKey === item.key;
+            return (
+              <Tooltip
+                key={item.key}
+                title={item.label}
+                placement="right"
+                overlayInnerStyle={{
+                  background: "rgba(0,0,0,0.75)",
+                  color: "#fff",
+                }}
+              >
+                <button
+                  className={`${styles.collapsedNavItem} ${
+                    isActive ? styles.collapsedNavItemActive : ""
                   }`}
-                  onClick={() => hasUpdate && handleOpenUpdateModal()}
+                  onClick={() =>
+                    item.href
+                      ? window.open(item.href, "_blank", "noopener,noreferrer")
+                      : navigate(item.path)
+                  }
                 >
-                  v{version}
-                </span>
-              </Badge>
-            )}
+                  {item.icon}
+                </button>
+              </Tooltip>
+            );
+          })}
+        </nav>
+      ) : (
+        <>
+          {/* Agent-scoped section: selector + Chat + Control + Workspace */}
+          <div className={styles.agentScopedSection}>
+            <div className={styles.agentSelectorContainer}>
+              <AgentSelector collapsed={collapsed} />
+              {/* Chat entry — sticky together with agent selector */}
+              <button
+                className={`${styles.stickyChatButton}${
+                  isChatActive ? ` ${styles.stickyChatButtonActive}` : ""
+                }`}
+                onClick={() => navigate(chatPath)}
+              >
+                <SparkChatTabFill size={16} />
+                <span>{t("nav.chat")}</span>
+              </button>
+            </div>
+            <Slot name="sider.top" kind="fill" />
+            <Menu
+              mode="inline"
+              selectedKeys={[selectedKey]}
+              openKeys={openKeys}
+              onClick={({ key }) => handleMenuClick(String(key), agentMenu)}
+              items={agentMenuItems}
+              theme={isDark ? "dark" : "light"}
+              className={styles.sideMenu}
+            />
           </div>
-        )}
+
+          {/* Global settings section */}
+          <Menu
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            openKeys={openKeys}
+            onClick={({ key }) => handleMenuClick(String(key), settingsMenu)}
+            items={settingsMenuItems}
+            theme={isDark ? "dark" : "light"}
+            className={styles.sideMenu}
+          />
+          <Slot name="sider.bottom" kind="fill" />
+        </>
+      )}
+
+      {authEnabled && !collapsed && (
+        <div className={styles.authActions}>
+          <Button
+            type="text"
+            icon={<SparkSearchUserLine size={16} />}
+            onClick={() => {
+              accountForm.resetFields();
+              setAccountModalOpen(true);
+            }}
+            block
+            className={`${styles.authBtn} ${
+              collapsed ? styles.authBtnCollapsed : ""
+            }`}
+          >
+            {!collapsed && t("account.title")}
+          </Button>
+          <Button
+            type="text"
+            icon={<SparkExitFullscreenLine size={16} />}
+            onClick={() => {
+              clearAuthToken();
+              window.location.href = "/login";
+            }}
+            block
+            className={`${styles.authBtn} ${
+              collapsed ? styles.authBtnCollapsed : ""
+            }`}
+          >
+            {!collapsed && t("login.logout")}
+          </Button>
+        </div>
+      )}
+
+      <div className={styles.collapseToggleContainer}>
         <Button
           type="text"
           icon={
             collapsed ? (
-              <PanelLeftOpen size={20} />
+              <SparkMenuExpandLine size={20} />
             ) : (
-              <PanelLeftClose size={20} />
+              <SparkMenuFoldLine size={20} />
             )
           }
           onClick={() => setCollapsed(!collapsed)}
-          className={styles.collapseBtn}
+          className={styles.collapseToggle}
         />
       </div>
 
-      <Menu
-        mode="inline"
-        selectedKeys={[selectedKey]}
-        openKeys={openKeys}
-        onOpenChange={(keys) => setOpenKeys(keys as string[])}
-        onClick={({ key }) => {
-          const path = KEY_TO_PATH[String(key)];
-          if (path) navigate(path);
-        }}
-        items={menuItems}
-      />
-
       <Modal
-        open={updateModalOpen}
-        onCancel={() => setUpdateModalOpen(false)}
-        title={
-          <h3 className={styles.updateModalTitle}>
-            {t("sidebar.updateModal.title", { version: latestVersion })}
-          </h3>
-        }
-        width={680}
-        footer={[
-          <Button
-            key="releases"
-            type="primary"
-            onClick={() =>
-              window.open(
-                "https://github.com/agentscope-ai/CoPaw/releases",
-                "_blank",
-              )
-            }
-            className={styles.updateModalPrimaryBtn}
-          >
-            {t("sidebar.updateModal.viewReleases")}
-          </Button>,
-          <Button key="close" onClick={() => setUpdateModalOpen(false)}>
-            {t("sidebar.updateModal.close")}
-          </Button>,
-        ]}
+        open={accountModalOpen}
+        onCancel={() => setAccountModalOpen(false)}
+        title={t("account.title")}
+        footer={null}
+        destroyOnHidden
+        centered
       >
-        <div className={styles.updateModalBody}>
-          {!updateMarkdown ? (
-            <div className={styles.updateModalSpinWrapper}>
-              <Spin />
-            </div>
-          ) : (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                code({ className, children, ...props }) {
-                  const isBlock =
-                    className?.startsWith("language-") ||
-                    String(children).includes("\n");
-                  if (isBlock) {
-                    return (
-                      <pre className={styles.codeBlock}>
-                        <CopyButton text={String(children)} />
-                        <code className={styles.codeBlockInner} {...props}>
-                          {children}
-                        </code>
-                      </pre>
-                    );
+        <Form
+          form={accountForm}
+          layout="vertical"
+          onFinish={handleUpdateProfile}
+        >
+          <Form.Item
+            name="currentPassword"
+            label={t("account.currentPassword")}
+            rules={[
+              { required: true, message: t("account.currentPasswordRequired") },
+            ]}
+          >
+            <Input.Password />
+          </Form.Item>
+          <Form.Item name="newUsername" label={t("account.newUsername")}>
+            <Input placeholder={t("account.newUsernamePlaceholder")} />
+          </Form.Item>
+          <Form.Item name="newPassword" label={t("account.newPassword")}>
+            <Input.Password placeholder={t("account.newPasswordPlaceholder")} />
+          </Form.Item>
+          <Form.Item
+            name="confirmPassword"
+            label={t("account.confirmPassword")}
+            dependencies={["newPassword"]}
+            rules={[
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value && !getFieldValue("newPassword")) {
+                    return Promise.resolve();
                   }
-                  return (
-                    <code className={styles.codeInline} {...props}>
-                      {children}
-                    </code>
+                  if (value === getFieldValue("newPassword")) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(
+                    new Error(t("account.passwordMismatch")),
                   );
                 },
-              }}
+              }),
+            ]}
+          >
+            <Input.Password
+              placeholder={t("account.confirmPasswordPlaceholder")}
+            />
+          </Form.Item>
+          <Form.Item>
+            <Button
+              type="primary"
+              htmlType="submit"
+              loading={accountLoading}
+              block
             >
-              {updateMarkdown}
-            </ReactMarkdown>
-          )}
-        </div>
+              {t("account.save")}
+            </Button>
+          </Form.Item>
+        </Form>
       </Modal>
     </Sider>
   );

@@ -6,6 +6,11 @@ labels: ["bug", "triage"]
 assignees: []
 ---
 
+## QwenPaw Version
+
+[Provide the version of QwenPaw you are using, e.g. 0.x.x or git commit hash.]
+[Using `qwenpaw --version` in your command line or checking the version in the console UI can help.]
+
 ## Description
 
 [Describe the bug clearly and concisely. What happened vs what you expected?]
@@ -28,7 +33,7 @@ assignees: []
 
 ## Environment
 
-- **CoPaw version:** [e.g. 0.x.x or git commit]
+- **QwenPaw version:** [e.g. 0.x.x or git commit]
 - **OS:** [e.g. macOS 14, Ubuntu 22.04, Windows 11]
 - **Install method:** [pip / one-line install / Docker / from source]
 - **Python version (if applicable):** [e.g. 3.10]

@@ -7,9 +7,9 @@ Set-Location $RepoRoot
 Write-Host "[build_win] REPO_ROOT=$RepoRoot"
 $PackDir = $PSScriptRoot
 $Dist = if ($env:DIST) { $env:DIST } else { "dist" }
-$Archive = Join-Path $Dist "copaw-env.zip"
+$Archive = Join-Path $Dist "qwenpaw-env.zip"
 $Unpacked = Join-Path $Dist "win-unpacked"
-$NsiPath = Join-Path $PackDir "copaw_desktop.nsi"
+$NsiPath = Join-Path $PackDir "desktop.nsi"
 
 # Packages affected by conda-unpack bug on Windows (conda-pack Issue #154)
 # conda-unpack corrupts Python string escaping when replacing path prefixes.
@@ -18,13 +18,14 @@ $NsiPath = Join-Path $PackDir "copaw_desktop.nsi"
 # See: issue.md, scripts/pack/WINDOWS_FIX.md
 $CondaUnpackAffectedPackages = @(
   "huggingface_hub"  # Uses Windows extended-length path prefix (\\?\)
+  "discord.py"       # ARG_NAME_SUBREGEX contains \\?\* which gets corrupted
 )
 
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 
 Write-Host "== Building wheel (includes console frontend) =="
 # Skip wheel_build if dist already has a wheel for current version
-$VersionFile = Join-Path $RepoRoot "src\copaw\__version__.py"
+$VersionFile = Join-Path $RepoRoot "src\qwenpaw\__version__.py"
 $CurrentVersion = ""
 if (Test-Path $VersionFile) {
   $m = (Get-Content $VersionFile -Raw) -match '__version__\s*=\s*"([^"]+)"'
@@ -32,14 +33,14 @@ if (Test-Path $VersionFile) {
 }
 $RunWheelBuild = $true
 if ($CurrentVersion) {
-  $wheelGlob = Join-Path $Dist "copaw-$CurrentVersion-*.whl"
+  $wheelGlob = Join-Path $Dist "qwenpaw-$CurrentVersion-*.whl"
   $existingWheels = Get-ChildItem -Path $wheelGlob -ErrorAction SilentlyContinue
   if ($existingWheels.Count -gt 0) {
     Write-Host "dist/ already has wheel for version $CurrentVersion, skipping."
     $RunWheelBuild = $false
   } else {
     # Clean up old wheels to avoid confusion
-    $oldWheels = Get-ChildItem -Path (Join-Path $Dist "copaw-*.whl") -ErrorAction SilentlyContinue
+    $oldWheels = Get-ChildItem -Path (Join-Path $Dist "qwenpaw-*.whl") -ErrorAction SilentlyContinue
     if ($oldWheels.Count -gt 0) {
       Write-Host "Removing old wheel files: $($oldWheels | ForEach-Object { $_.Name })"
       $oldWheels | Remove-Item -Force
@@ -116,6 +117,10 @@ if (Test-Path $CondaUnpack) {
     if ($LASTEXITCODE -ne 0) {
       throw "CRITICAL: huggingface_hub still has import errors after reinstall. See issue.md"
     }
+    & $pythonExe -c "import discord; print('✓ discord.py import OK')"
+    if ($LASTEXITCODE -ne 0) {
+      throw "CRITICAL: discord.py still has import errors after reinstall."
+    }
     Write-Host "[build_win] ✓ conda-unpack corruption fixed successfully."
   } else {
     Write-Host "[build_win] WARN: wheels_cache not found at $WheelsCache" -ForegroundColor Yellow
@@ -125,49 +130,140 @@ if (Test-Path $CondaUnpack) {
   Write-Host "[build_win] WARN: conda-unpack.exe not found at $CondaUnpack, skipping."
 }
 
+Write-Host "== Pre-compiling Python bytecode for faster startup =="
+$pythonExe = Join-Path $EnvRoot "python.exe"
+if (Test-Path $pythonExe) {
+  Write-Host "[build_win] Compiling all .py files to .pyc..."
+  $compileStart = Get-Date
+  
+  # Compile all Python files to bytecode
+  # -q: quiet mode (only show errors)
+  # -j 0: use all CPU cores for parallel compilation
+  & $pythonExe -m compileall -q -j 0 $EnvRoot
+  
+  if ($LASTEXITCODE -eq 0) {
+    $compileEnd = Get-Date
+    $compileTime = ($compileEnd - $compileStart).TotalSeconds
+    Write-Host "[build_win] ✓ Bytecode compilation completed in $($compileTime.ToString('F1')) seconds"
+    
+    # Count compiled files for reporting
+    $pycCount = (Get-ChildItem -Path $EnvRoot -Recurse -Filter "*.pyc" -ErrorAction SilentlyContinue | Measure-Object).Count
+    Write-Host "[build_win] Generated $pycCount .pyc files (these will be included in installer)"
+  } else {
+    Write-Host "[build_win] WARN: Bytecode compilation had some errors (exit code: $LASTEXITCODE)" -ForegroundColor Yellow
+    Write-Host "[build_win] This is usually not critical - app will compile on first run" -ForegroundColor Yellow
+  }
+} else {
+  Write-Host "[build_win] WARN: python.exe not found at $pythonExe, skipping bytecode compilation" -ForegroundColor Yellow
+}
+
 # Main launcher .bat (will be hidden by VBS)
-$LauncherBat = Join-Path $EnvRoot "CoPaw Desktop.bat"
+$LauncherBat = Join-Path $EnvRoot "QwenPaw Desktop.bat"
 @"
 @echo off
 cd /d "%~dp0"
-if not exist "%USERPROFILE%\.copaw\config.json" (
-  "%~dp0python.exe" -m copaw init --defaults --accept-security
+
+REM Isolate packaged Python from user site-packages to prevent conflicts
+set "PYTHONNOUSERSITE=1"
+
+REM Preserve system PATH for accessing system commands
+REM Prepend packaged env to PATH so packaged Python takes precedence
+set "PATH=%~dp0;%~dp0Scripts;%PATH%"
+
+REM Log level: env var QWENPAW_LOG_LEVEL or default to "info"
+if not defined QWENPAW_LOG_LEVEL set "QWENPAW_LOG_LEVEL=info"
+
+REM Set SSL certificate paths for packaged environment
+REM Use temp file to avoid for /f blocking issue in bat scripts
+set "CERT_TMP=%TEMP%\qwenpaw_cert_%RANDOM%.txt"
+"%~dp0python.exe" -u -c "import certifi; print(certifi.where())" > "%CERT_TMP%" 2>nul
+set /p CERT_FILE=<"%CERT_TMP%"
+del "%CERT_TMP%" 2>nul
+if defined CERT_FILE (
+  if exist "%CERT_FILE%" (
+    set "SSL_CERT_FILE=%CERT_FILE%"
+    set "REQUESTS_CA_BUNDLE=%CERT_FILE%"
+    set "CURL_CA_BUNDLE=%CERT_FILE%"
+  )
 )
-"%~dp0python.exe" -m copaw desktop
+
+if not exist "%USERPROFILE%\.qwenpaw\config.json" (
+  "%~dp0python.exe" -u -m qwenpaw init --defaults --accept-security
+)
+"%~dp0python.exe" -u -m qwenpaw desktop --log-level %QWENPAW_LOG_LEVEL%
 "@ | Set-Content -Path $LauncherBat -Encoding ASCII
 
 # Debug launcher .bat (shows console)
-$DebugBat = Join-Path $EnvRoot "CoPaw Desktop (Debug).bat"
+$DebugBat = Join-Path $EnvRoot "QwenPaw Desktop (Debug).bat"
 @"
 @echo off
 cd /d "%~dp0"
+
+REM Isolate packaged Python from user site-packages to prevent conflicts
+set "PYTHONNOUSERSITE=1"
+
+REM Preserve system PATH for accessing system commands
+REM Prepend packaged env to PATH so packaged Python takes precedence
+set "PATH=%~dp0;%~dp0Scripts;%PATH%"
+
+REM Debug mode: use debug log level by default (can override with QWENPAW_LOG_LEVEL)
+if not defined QWENPAW_LOG_LEVEL set "QWENPAW_LOG_LEVEL=debug"
+
+REM Set SSL certificate paths for packaged environment
+REM Use temp file to avoid for /f blocking issue in bat scripts
+set "CERT_TMP=%TEMP%\qwenpaw_cert_%RANDOM%.txt"
+"%~dp0python.exe" -u -c "import certifi; print(certifi.where())" > "%CERT_TMP%" 2>nul
+set /p CERT_FILE=<"%CERT_TMP%"
+del "%CERT_TMP%" 2>nul
+if defined CERT_FILE (
+  if exist "%CERT_FILE%" (
+    set "SSL_CERT_FILE=%CERT_FILE%"
+    set "REQUESTS_CA_BUNDLE=%CERT_FILE%"
+    set "CURL_CA_BUNDLE=%CERT_FILE%"
+  )
+)
+
 echo ====================================
-echo CoPaw Desktop - Debug Mode
+echo QwenPaw Desktop - Debug Mode
 echo ====================================
 echo Working Directory: %cd%
 echo Python: "%~dp0python.exe"
+echo PATH: %PATH%
+echo PYTHONNOUSERSITE: %PYTHONNOUSERSITE%
+echo Log Level: %QWENPAW_LOG_LEVEL%
+echo SSL_CERT_FILE: %SSL_CERT_FILE%
+echo REQUESTS_CA_BUNDLE: %REQUESTS_CA_BUNDLE%
+echo CURL_CA_BUNDLE: %CURL_CA_BUNDLE%
 echo.
-if not exist "%USERPROFILE%\.copaw\config.json" (
+if not exist "%USERPROFILE%\.qwenpaw\config.json" (
   echo [Init] Creating config...
-  "%~dp0python.exe" -m copaw init --defaults --accept-security
+  "%~dp0python.exe" -u -m qwenpaw init --defaults --accept-security
 )
-echo [Launch] Starting CoPaw Desktop...
+echo [Launch] Starting QwenPaw Desktop with log-level=%QWENPAW_LOG_LEVEL%...
 echo Press Ctrl+C to stop
 echo.
-"%~dp0python.exe" -m copaw desktop
+"%~dp0python.exe" -u -m qwenpaw desktop --log-level %QWENPAW_LOG_LEVEL%
 echo.
-echo [Exit] CoPaw Desktop closed
+echo [Exit] QwenPaw Desktop closed
 pause
 "@ | Set-Content -Path $DebugBat -Encoding ASCII
 
 # VBScript launcher (no console window)
-$LauncherVbs = Join-Path $EnvRoot "CoPaw Desktop.vbs"
+$LauncherVbs = Join-Path $EnvRoot "QwenPaw Desktop.vbs"
 @"
 Set WshShell = CreateObject("WScript.Shell")
-batPath = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName) & "\CoPaw Desktop.bat"
+batPath = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName) & "\QwenPaw Desktop.bat"
 WshShell.Run Chr(34) & batPath & Chr(34), 0, False
 Set WshShell = Nothing
 "@ | Set-Content -Path $LauncherVbs -Encoding ASCII
+
+# Create qwenpaw.cmd wrapper in env root so "qwenpaw" resolves to this
+# instead of Scripts\qwenpaw.exe whose embedded Python path may be stale
+# after conda-pack/unpack.
+$QwenpawCmd = Join-Path $EnvRoot "qwenpaw.cmd"
+@"
+@"%~dp0python.exe" -u -m qwenpaw %*
+"@ | Set-Content -Path $QwenpawCmd -Encoding ASCII
 
 # Copy icon.ico to env root so NSIS can find it
 $IconSrc = Join-Path $PackDir "assets\icon.ico"
@@ -190,7 +286,7 @@ $Version = $CurrentVersion
 if (-not $Version) {
   # Fallback: try to get version from packed env metadata
   try {
-    $Version = (& (Join-Path $EnvRoot "python.exe") -c "from importlib.metadata import version; print(version('copaw'))" 2>&1) -replace '\s+$', ''
+    $Version = (& (Join-Path $EnvRoot "python.exe") -c "from importlib.metadata import version; print(version('qwenpaw'))" 2>&1) -replace '\s+$', ''
     Write-Host "[build_win] Using version from packed env metadata: $Version"
   } catch {
     Write-Host "[build_win] version from packed env failed: $_"
@@ -198,13 +294,13 @@ if (-not $Version) {
 }
 if (-not $Version) { $Version = "0.0.0"; Write-Host "[build_win] WARN: Using fallback version 0.0.0" }
 Write-Host "[build_win] Version determined: $Version"
-Write-Host "[build_win] COPAW_VERSION=$Version OUTPUT_EXE will be under $Dist"
-$OutInstaller = Join-Path (Join-Path $RepoRoot $Dist) "CoPaw-Setup-$Version.exe"
+Write-Host "[build_win] QWENPAW_VERSION=$Version OUTPUT_EXE will be under $Dist"
+$OutInstaller = Join-Path (Join-Path $RepoRoot $Dist) "QwenPaw-Setup-$Version.exe"
 # Pass absolute paths to NSIS (keep backslashes).
 $UnpackedFull = (Resolve-Path $EnvRoot).Path
 $OutputExeNsi = [System.IO.Path]::GetFullPath($OutInstaller)
 $nsiArgs = @(
-  "/DCOPAW_VERSION=$Version",
+  "/DQWENPAW_VERSION=$Version",
   "/DOUTPUT_EXE=$OutputExeNsi",
   "/DUNPACKED=$UnpackedFull",
   $NsiPath

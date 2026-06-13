@@ -1,76 +1,79 @@
-import { Layout } from "antd";
-import { useEffect } from "react";
-import { Routes, Route, useLocation, useNavigate } from "react-router-dom";
+import { Suspense, useMemo } from "react";
+import { Layout, Spin } from "antd";
+import { Routes, Route, useLocation, matchPath } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import Sidebar from "../Sidebar";
 import Header from "../Header";
-import ConsoleCronBubble from "../../components/ConsoleCronBubble";
+import ConsolePollService from "../../components/ConsolePollService";
+import { ChunkErrorBoundary } from "../../components/ChunkErrorBoundary";
+import { useSyncCodingMode } from "../../stores/useSyncCodingMode";
 import styles from "../index.module.less";
-import Chat from "../../pages/Chat";
-import ChannelsPage from "../../pages/Control/Channels";
-import SessionsPage from "../../pages/Control/Sessions";
-import CronJobsPage from "../../pages/Control/CronJobs";
-import HeartbeatPage from "../../pages/Control/Heartbeat";
-import AgentConfigPage from "../../pages/Agent/Config";
-import SkillsPage from "../../pages/Agent/Skills";
-import WorkspacePage from "../../pages/Agent/Workspace";
-import MCPPage from "../../pages/Agent/MCP";
-import ModelsPage from "../../pages/Settings/Models";
-import EnvironmentsPage from "../../pages/Settings/Environments";
+import { useRoutes } from "../../plugins/registry/hooks";
+import { Slot } from "../../plugins/registry/Slot";
 
 const { Content } = Layout;
 
-const pathToKey: Record<string, string> = {
-  "/chat": "chat",
-  "/channels": "channels",
-  "/sessions": "sessions",
-  "/cron-jobs": "cron-jobs",
-  "/heartbeat": "heartbeat",
-  "/skills": "skills",
-  "/mcp": "mcp",
-  "/workspace": "workspace",
-  "/agents": "agents",
-  "/models": "models",
-  "/environments": "environments",
-  "/agent-config": "agent-config",
-};
+/**
+ * Find the registered route whose path pattern matches the current URL.
+ * Falls back to "core.chat" so the sidebar always has a sensible
+ * highlight, mirroring the old `pathToKey` default.
+ */
+function pickSelectedKey(
+  currentPath: string,
+  routes: ReturnType<typeof useRoutes>,
+): string {
+  for (const r of routes) {
+    if (matchPath({ path: r.path, end: r.path === "/" }, currentPath)) {
+      return r.id;
+    }
+  }
+  return "core.chat";
+}
 
 export default function MainLayout() {
+  const { t } = useTranslation();
   const location = useLocation();
-  const navigate = useNavigate();
   const currentPath = location.pathname;
-  const selectedKey = pathToKey[currentPath] || "chat";
+  const routes = useRoutes();
 
-  useEffect(() => {
-    if (currentPath === "/") {
-      navigate("/chat", { replace: true });
-    }
-  }, [currentPath, navigate]);
+  // Backend is the source of truth for Coding Mode state — refill the
+  // in-memory store every time the selected agent changes.
+  useSyncCodingMode();
+
+  const selectedKey = useMemo(
+    () => pickSelectedKey(currentPath, routes),
+    [currentPath, routes],
+  );
 
   return (
     <Layout className={styles.mainLayout}>
-      <Sidebar selectedKey={selectedKey} />
+      <Header />
       <Layout>
-        <Header selectedKey={selectedKey} />
+        <Sidebar selectedKey={selectedKey} />
         <Content className="page-container">
-          <ConsoleCronBubble />
+          <ConsolePollService />
+          <Slot name="content.statusBar" kind="fill" />
           <div className="page-content">
-            <Routes>
-              <Route path="/chat" element={<Chat />} />
-              <Route path="/channels" element={<ChannelsPage />} />
-              <Route path="/sessions" element={<SessionsPage />} />
-              <Route path="/cron-jobs" element={<CronJobsPage />} />
-              <Route path="/heartbeat" element={<HeartbeatPage />} />
-              <Route path="/skills" element={<SkillsPage />} />
-              <Route path="/mcp" element={<MCPPage />} />
-              <Route path="/workspace" element={<WorkspacePage />} />
-              <Route path="/models" element={<ModelsPage />} />
-              <Route path="/environments" element={<EnvironmentsPage />} />
-              <Route path="/agent-config" element={<AgentConfigPage />} />
-              <Route path="/" element={<Chat />} />
-            </Routes>
+            <ChunkErrorBoundary resetKey={currentPath}>
+              <Suspense
+                fallback={
+                  <Spin
+                    tip={t("common.loading")}
+                    style={{ display: "block", margin: "20vh auto" }}
+                  />
+                }
+              >
+                <Routes>
+                  {routes.map((r) => (
+                    <Route key={r.id} path={r.path} element={<r.Component />} />
+                  ))}
+                </Routes>
+              </Suspense>
+            </ChunkErrorBoundary>
           </div>
         </Content>
       </Layout>
+      <Slot name="overlay.global" kind="fill" />
     </Layout>
   );
 }

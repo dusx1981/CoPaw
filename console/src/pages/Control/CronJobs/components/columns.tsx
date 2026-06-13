@@ -3,21 +3,25 @@ import type { ColumnsType } from "antd/es/table";
 import type { MenuProps } from "antd";
 import type { CronJobSpecOutput } from "../../../../api/types";
 import { CopyOutlined, MoreOutlined } from "@ant-design/icons";
-import { message } from "antd";
+import dayjs from "dayjs";
+import { useAppMessage } from "../../../../hooks/useAppMessage";
 import { TFunction } from "i18next";
 import { parseCron } from "./parseCron";
+import styles from "../index.module.less";
 
 type CronJob = CronJobSpecOutput;
 
 interface ColumnHandlers {
   onToggleEnabled: (job: CronJob) => void;
   onExecuteNow: (job: CronJob) => void;
+  onViewHistory: (job: CronJob) => void;
   onEdit: (job: CronJob) => void;
   onDelete: (jobId: string) => void;
   t: TFunction;
 }
 
 const createCopyToClipboard = (t: TFunction) => async (text: string) => {
+  const { message } = useAppMessage();
   try {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
@@ -66,21 +70,11 @@ export const createColumns = (
       key: "enabled",
       width: 100,
       render: (enabled: boolean) => (
-        <span
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 12,
-          }}
-        >
+        <span className={styles.statusIndicator}>
           <span
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: "50%",
-              backgroundColor: enabled ? "#52c41a" : "#d9d9d9",
-            }}
+            className={`${styles.statusDot} ${
+              enabled ? styles.enabled : styles.disabled
+            }`}
           />
           {enabled
             ? handlers.t("common.enabled")
@@ -93,16 +87,30 @@ export const createColumns = (
       dataIndex: ["schedule", "type"],
       key: "schedule_type",
       width: 140,
-      render: () => "cron",
+      render: (type: string) =>
+        type === "once"
+          ? handlers.t("cronJobs.scheduleTypeOnce")
+          : handlers.t("cronJobs.scheduleTypeRecurring"),
     },
     {
       title: handlers.t("cronJobs.scheduleCron"),
-      dataIndex: ["schedule", "cron"],
+      dataIndex: "schedule",
       key: "cron",
       width: 180,
-      render: (cron: string) => {
+      render: (schedule: any) => {
+        if (schedule?.type === "once") {
+          const displayText = schedule?.run_at
+            ? dayjs(schedule.run_at).format("YYYY-MM-DD HH:mm")
+            : "-";
+          return (
+            <Tooltip title={schedule?.run_at || displayText}>
+              <span className={styles.cronText}>{displayText}</span>
+            </Tooltip>
+          );
+        }
+        const cron = schedule?.cron || "0 9 * * *";
         // Parse cron to friendly text
-        const cronParts = parseCron(cron || "0 9 * * *");
+        const cronParts = parseCron(cron);
         let displayText = "";
 
         switch (cronParts.type) {
@@ -117,14 +125,14 @@ export const createColumns = (
           case "weekly": {
             const dayNames = (cronParts.daysOfWeek || [])
               .map((d) => {
-                const dayMap: Record<number, string> = {
-                  0: handlers.t("cronJobs.cronDaySun"),
-                  1: handlers.t("cronJobs.cronDayMon"),
-                  2: handlers.t("cronJobs.cronDayTue"),
-                  3: handlers.t("cronJobs.cronDayWed"),
-                  4: handlers.t("cronJobs.cronDayThu"),
-                  5: handlers.t("cronJobs.cronDayFri"),
-                  6: handlers.t("cronJobs.cronDaySat"),
+                const dayMap: Record<string, string> = {
+                  mon: handlers.t("cronJobs.cronDayMon"),
+                  tue: handlers.t("cronJobs.cronDayTue"),
+                  wed: handlers.t("cronJobs.cronDayWed"),
+                  thu: handlers.t("cronJobs.cronDayThu"),
+                  fri: handlers.t("cronJobs.cronDayFri"),
+                  sat: handlers.t("cronJobs.cronDaySat"),
+                  sun: handlers.t("cronJobs.cronDaySun"),
                 };
                 return dayMap[d] || d;
               })
@@ -145,14 +153,17 @@ export const createColumns = (
           <Tooltip
             title={
               <div>
-                <div>Cron 表达式: {cron}</div>
-                <div style={{ fontSize: 11, opacity: 0.8, marginTop: 4 }}>
-                  格式: 分钟 小时 日 月 星期
+                <div>Cron 表达式：{cron}</div>
+                <div
+                  className={styles.tableText}
+                  style={{ opacity: 0.8, marginTop: 4 }}
+                >
+                  格式：分钟 小时 日 月 星期
                 </div>
               </div>
             }
           >
-            <span style={{ fontSize: 12, cursor: "help" }}>{displayText}</span>
+            <span className={styles.cronText}>{displayText}</span>
           </Tooltip>
         );
       },
@@ -170,7 +181,7 @@ export const createColumns = (
       width: 140,
     },
     {
-      title: handlers.t("cronJobs.taskText"),
+      title: handlers.t("cronJobs.text"),
       dataIndex: "text",
       key: "text",
       width: 200,
@@ -181,13 +192,13 @@ export const createColumns = (
         if (!text) return "-";
         return (
           <Tooltip title={text}>
-            <span style={{ fontSize: 12 }}>{text}</span>
+            <span className={styles.tableText}>{text}</span>
           </Tooltip>
         );
       },
     },
     {
-      title: "RequestInput",
+      title: handlers.t("cronJobs.requestInput"),
       dataIndex: ["request", "input"],
       key: "request_input",
       width: 350,
@@ -207,7 +218,7 @@ export const createColumns = (
         }
 
         if (displayText.length <= 50) {
-          return <code style={{ fontSize: 12 }}>{displayText}</code>;
+          return <code className={styles.codeText}>{displayText}</code>;
         }
 
         const truncatedText =
@@ -218,20 +229,8 @@ export const createColumns = (
         return (
           <Tooltip
             title={
-              <div style={{ position: "relative" }}>
-                <div
-                  style={{
-                    maxWidth: 400,
-                    maxHeight: 300,
-                    overflow: "auto",
-                    whiteSpace: "pre-wrap",
-                    fontSize: 12,
-                    fontFamily: "monospace",
-                    paddingRight: 30,
-                  }}
-                >
-                  {fullText}
-                </div>
+              <div className={styles.tooltipContent}>
+                <div className={styles.tooltipJsonContent}>{fullText}</div>
                 <Button
                   type="text"
                   icon={<CopyOutlined />}
@@ -240,43 +239,17 @@ export const createColumns = (
                     e.stopPropagation();
                     copyToClipboard(fullText);
                   }}
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    right: 0,
-                    color: "#1890ff",
-                    zIndex: 10,
-                  }}
+                  className={styles.copyButton}
                 />
               </div>
             }
             placement="topLeft"
             overlayInnerStyle={{ maxWidth: 400 }}
           >
-            <code
-              style={{
-                fontSize: 12,
-                cursor: "help",
-                textDecoration: "underline dotted",
-              }}
-            >
-              {truncatedText}
-            </code>
+            <code className={styles.codeLink}>{truncatedText}</code>
           </Tooltip>
         );
       },
-    },
-    {
-      title: "RequestSessionID",
-      dataIndex: ["request", "session_id"],
-      key: "session_id",
-      width: 160,
-    },
-    {
-      title: "RequestUserID",
-      dataIndex: ["request", "user_id"],
-      key: "user_id",
-      width: 140,
     },
     {
       title: "DispatchType",
@@ -329,7 +302,7 @@ export const createColumns = (
     {
       title: handlers.t("cronJobs.action"),
       key: "action",
-      width: 240,
+      width: 320,
       fixed: "right",
       render: (_: unknown, record: CronJob) => {
         const menuItems: MenuProps["items"] = [
@@ -349,7 +322,7 @@ export const createColumns = (
         ];
 
         return (
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className={styles.actionColumn}>
             <Button
               type="link"
               size="small"
@@ -365,6 +338,13 @@ export const createColumns = (
               onClick={() => handlers.onExecuteNow(record)}
             >
               {handlers.t("cronJobs.executeNow")}
+            </Button>
+            <Button
+              type="link"
+              size="small"
+              onClick={() => handlers.onViewHistory(record)}
+            >
+              {handlers.t("cronJobs.executionHistory")}
             </Button>
             <Dropdown menu={{ items: menuItems }} placement="bottomRight">
               <Button type="text" size="small" icon={<MoreOutlined />} />

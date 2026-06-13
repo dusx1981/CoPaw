@@ -1,4 +1,40 @@
-import { getApiUrl, getApiToken } from "./config";
+import { getApiUrl, clearAuthToken } from "./config";
+import { buildAuthHeaders } from "./authHeaders";
+
+function getErrorMessageFromBody(
+  text: string,
+  contentType: string,
+): string | null {
+  if (!text) {
+    return null;
+  }
+
+  if (!contentType.includes("application/json")) {
+    return text;
+  }
+
+  try {
+    const payload = JSON.parse(text) as {
+      detail?: unknown;
+      message?: unknown;
+      error?: unknown;
+    };
+
+    if (typeof payload.detail === "string" && payload.detail) {
+      return payload.detail;
+    }
+    if (typeof payload.message === "string" && payload.message) {
+      return payload.message;
+    }
+    if (typeof payload.error === "string" && payload.error) {
+      return payload.error;
+    }
+  } catch {
+    return text;
+  }
+
+  return text;
+}
 
 function buildHeaders(method?: string, extra?: HeadersInit): Headers {
   // Normalize extra to a Headers instance for consistent handling
@@ -12,10 +48,10 @@ function buildHeaders(method?: string, extra?: HeadersInit): Headers {
     }
   }
 
-  // Add authorization token if available
-  const token = getApiToken();
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
+  for (const [key, value] of Object.entries(buildAuthHeaders())) {
+    if (!headers.has(key)) {
+      headers.set(key, value);
+    }
   }
 
   return headers;
@@ -35,12 +71,24 @@ export async function request<T = unknown>(
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      clearAuthToken();
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+      throw new Error("Not authenticated");
+    }
+
     const text = await response.text().catch(() => "");
-    throw new Error(
-      `Request failed: ${response.status} ${response.statusText}${
-        text ? ` - ${text}` : ""
-      }`,
-    );
+    const contentType = response.headers.get("content-type") || "";
+    const errorMessage = getErrorMessageFromBody(text, contentType);
+
+    // Preserve raw body for parseErrorDetail() to extract structured fields
+    const finalMessage = errorMessage
+      ? `${errorMessage} - ${text}`
+      : `Request failed: ${response.status} ${response.statusText}`;
+
+    throw new Error(finalMessage);
   }
 
   if (response.status === 204) {

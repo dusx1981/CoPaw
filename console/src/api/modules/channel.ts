@@ -25,4 +25,27 @@ export const channelApi = {
         body: JSON.stringify(body),
       },
     ),
+
+  getChannelQrcode: (channel: string, params?: Record<string, string>) => {
+    const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+    return request<{ qrcode_img: string; poll_token: string }>(
+      `/config/channels/${encodeURIComponent(channel)}/qrcode${qs}`,
+    );
+  },
+
+  getChannelQrcodeStatus: (
+    channel: string,
+    token: string,
+    params?: Record<string, string>,
+  ) => {
+    const extra = params ? "&" + new URLSearchParams(params).toString() : "";
+    return request<{
+      status: string;
+      credentials: Record<string, string>;
+    }>(
+      `/config/channels/${encodeURIComponent(
+        channel,
+      )}/qrcode/status?token=${encodeURIComponent(token)}${extra}`,
+    );
+  },
 };

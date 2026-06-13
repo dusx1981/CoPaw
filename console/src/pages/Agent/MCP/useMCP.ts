@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { message } from "@agentscope-ai/design";
+import { useAppMessage } from "../../../hooks/useAppMessage";
 import api from "../../../api";
 import type { MCPClientInfo } from "../../../api/types";
 import { useTranslation } from "react-i18next";
+import { useAgentStore } from "../../../stores/agentStore";
 
 export function useMCP() {
   const { t } = useTranslation();
+  const { selectedAgent } = useAgentStore();
   const [clients, setClients] = useState<MCPClientInfo[]>([]);
   const [loading, setLoading] = useState(false);
+  const { message } = useAppMessage();
 
   const loadClients = useCallback(async () => {
     setLoading(true);
@@ -24,7 +27,7 @@ export function useMCP() {
 
   useEffect(() => {
     loadClients();
-  }, [loadClients]);
+  }, [loadClients, selectedAgent]);
 
   const createClient = useCallback(
     async (
@@ -124,5 +127,6 @@ export function useMCP() {
     updateClient,
     toggleEnabled,
     deleteClient,
+    refreshClients: loadClients,
   };
 }

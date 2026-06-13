@@ -1,37 +1,36 @@
-import { useState } from "react";
-import { Card, Button, Tag, Modal, message } from "@agentscope-ai/design";
-import {
-  EditOutlined,
-  DeleteOutlined,
-  AppstoreOutlined,
-} from "@ant-design/icons";
-import type { ProviderInfo, ActiveModelsInfo } from "../../../../../api/types";
-import { ProviderConfigModal } from "../modals/ProviderConfigModal";
-import { ModelManageModal } from "../modals/ModelManageModal";
+import React, { useState } from "react";
+import { Card, Button, Modal, Input } from "@agentscope-ai/design";
+import type { ProviderInfo } from "../../../../../api/types";
 import api from "../../../../../api";
+import { providerApi } from "../../../../../api/modules/provider";
 import { useTranslation } from "react-i18next";
+import { useAppMessage } from "../../../../../hooks/useAppMessage";
+import { getIsConfigured } from "../../utils";
 import styles from "../../index.module.less";
+import { ProviderIcon } from "../ProviderIconComponent";
+import { OAuthConfirmModal } from "../../../../Chat/ModelSelector/OAuthConfirmModal";
 
 interface RemoteProviderCardProps {
   provider: ProviderInfo;
-  activeModels: ActiveModelsInfo | null;
   onSaved: () => void;
-  isHover: boolean;
-  onMouseEnter: () => void;
-  onMouseLeave: () => void;
+  onOpenConfig: (provider: ProviderInfo) => void;
+  onOpenModels: (provider: ProviderInfo) => void;
 }
 
-export function RemoteProviderCard({
+export const RemoteProviderCard = React.memo(function RemoteProviderCard({
   provider,
-  activeModels,
   onSaved,
-  isHover,
-  onMouseEnter,
-  onMouseLeave,
+  onOpenConfig,
+  onOpenModels,
 }: RemoteProviderCardProps) {
   const { t } = useTranslation();
-  const [modalOpen, setModalOpen] = useState(false);
-  const [modelManageOpen, setModelManageOpen] = useState(false);
+  const { message } = useAppMessage();
+  const [oauthModalOpen, setOauthModalOpen] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [apiKeySaving, setApiKeySaving] = useState(false);
+
+  const needsOAuth =
+    provider.supports_oauth && !provider.api_key && !provider.oauth_connected;
 
   const handleDeleteProvider = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -57,26 +56,15 @@ export function RemoteProviderCard({
     });
   };
 
-  const totalCount = provider.models.length;
-  const isConfigured =
-    provider.id === "ollama"
-      ? !!provider.current_base_url
-      : provider.is_local
-      ? true
-      : provider.is_custom
-      ? !!provider.current_base_url
-      : !!provider.current_api_key;
+  const totalCount = provider.models.length + provider.extra_models.length;
+  const isConfigured = getIsConfigured(provider);
   const hasModels = totalCount > 0;
   const isAvailable = isConfigured && hasModels;
 
   const providerTag = provider.is_custom ? (
-    <Tag color="blue" style={{ marginLeft: 8, fontSize: 11 }}>
-      {t("models.custom")}
-    </Tag>
+    <span className={styles.customTag}>{t("models.custom")}</span>
   ) : (
-    <Tag color="green" style={{ marginLeft: 8, fontSize: 11 }}>
-      {t("models.builtin")}
-    </Tag>
+    <span className={styles.builtinTag}>{t("models.builtin")}</span>
   );
 
   const statusLabel = isAvailable
@@ -90,7 +78,7 @@ export function RemoteProviderCard({
     ? "partial"
     : "disabled";
   const statusDotColor = isAvailable
-    ? "#52c41a"
+    ? "rgba(20, 184, 166, 1)"
     : isConfigured
     ? "#faad14"
     : "#d9d9d9";
@@ -101,130 +89,169 @@ export function RemoteProviderCard({
     : "none";
 
   return (
-    <Card
-      hoverable
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
-      className={`${styles.providerCard} ${
-        isAvailable ? styles.enabledCard : ""
-      } ${isHover ? styles.hover : styles.normal}`}
-    >
-      <div style={{ marginBottom: 16 }}>
-        <div className={styles.cardHeader}>
-          <span className={styles.cardName}>
-            {provider.name}
-            {providerTag}
+    <Card hoverable className={styles.providerCard}>
+      {/* Card Header with Icon and Status */}
+      <div className={styles.cardHeaderRow}>
+        <ProviderIcon providerId={provider.id} size={32} />
+        <div className={styles.cardStatusHeader}>
+          <span
+            className={styles.statusDot}
+            style={{
+              backgroundColor: statusDotColor,
+              boxShadow: statusDotShadow,
+            }}
+          />
+          <span
+            className={`${styles.statusText} ${
+              statusType === "enabled"
+                ? styles.enabled
+                : statusType === "partial"
+                ? styles.partial
+                : styles.disabled
+            }`}
+          >
+            {statusLabel}
           </span>
-          <div className={styles.statusContainer}>
-            <span
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                backgroundColor: statusDotColor,
-                boxShadow: statusDotShadow,
-              }}
-            />
-            <span
-              className={`${styles.statusText} ${
-                statusType === "enabled"
-                  ? styles.enabled
-                  : statusType === "partial"
-                  ? styles.partial
-                  : styles.disabled
-              }`}
-            >
-              {statusLabel}
-            </span>
-          </div>
         </div>
+      </div>
 
-        <div className={styles.cardInfo}>
-          <div className={styles.infoRow}>
-            <span className={styles.infoLabel}>{t("models.baseURL")}:</span>
-            {provider.current_base_url ? (
-              <span
-                className={styles.infoValue}
-                title={provider.current_base_url}
-              >
-                {provider.current_base_url}
-              </span>
-            ) : (
-              <span className={styles.infoEmpty}>{t("models.notSet")}</span>
-            )}
-          </div>
-          <div className={styles.infoRow}>
-            <span className={styles.infoLabel}>{t("models.apiKey")}:</span>
-            {provider.current_api_key ? (
-              <span className={styles.infoValue}>
-                {provider.current_api_key}
-              </span>
-            ) : (
-              <span className={styles.infoEmpty}>{t("models.notSet")}</span>
-            )}
-          </div>
-          <div className={styles.infoRow}>
-            <span className={styles.infoLabel}>{t("models.model")}:</span>
-            <span className={styles.infoValue}>
-              {totalCount > 0
-                ? t("models.modelsCount", { count: totalCount })
-                : t("models.noModels")}
+      {/* Title Row */}
+      <div className={styles.cardTitleRow}>
+        <span className={styles.cardName}>{provider.name}</span>
+        {providerTag}
+      </div>
+
+      {/* Info Section */}
+      <div className={styles.cardInfo}>
+        <div className={styles.infoRow}>
+          <span className={styles.infoLabel}>Base URL:</span>
+          {provider.base_url ? (
+            <span className={styles.infoValue} title={provider.base_url}>
+              {provider.base_url}
             </span>
-          </div>
+          ) : (
+            <span className={styles.infoEmpty}>{t("models.notSet")}</span>
+          )}
+        </div>
+        <div className={styles.infoRow}>
+          <span className={styles.infoLabel}>API Key:</span>
+          {provider.api_key ? (
+            <span className={styles.infoValue}>{provider.api_key}</span>
+          ) : provider.require_api_key === false ? (
+            <span className={styles.infoEmpty}>{t("models.notRequired")}</span>
+          ) : (
+            <div className={styles.inlineKeyInput}>
+              <Input.Password
+                size="small"
+                value={apiKeyInput}
+                onChange={(e) => setApiKeyInput(e.target.value)}
+                placeholder={
+                  provider.api_key_prefix
+                    ? `${provider.api_key_prefix}...`
+                    : "sk-..."
+                }
+                style={{ flex: 1 }}
+              />
+              <Button
+                type="primary"
+                size="small"
+                loading={apiKeySaving}
+                disabled={!apiKeyInput.trim()}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setApiKeySaving(true);
+                  try {
+                    await providerApi.configureProvider(provider.id, {
+                      api_key: apiKeyInput.trim(),
+                    });
+                    message.success(t("models.saved"));
+                    setApiKeyInput("");
+                    onSaved();
+                  } catch (err) {
+                    const msg =
+                      err instanceof Error
+                        ? err.message
+                        : t("models.failedToSave");
+                    message.error(msg);
+                  } finally {
+                    setApiKeySaving(false);
+                  }
+                }}
+              >
+                {t("models.saveApiKey")}
+              </Button>
+            </div>
+          )}
+        </div>
+        <div className={styles.infoRow}>
+          <span className={styles.infoLabel}>Model:</span>
+          <span className={styles.infoValue}>
+            {totalCount > 0
+              ? t("models.modelsCount", { count: totalCount })
+              : t("models.noModels")}
+          </span>
         </div>
       </div>
 
       <div className={styles.cardActions}>
+        {needsOAuth && (
+          <Button
+            type="primary"
+            size="small"
+            onClick={(e) => {
+              e.stopPropagation();
+              setOauthModalOpen(true);
+            }}
+            className={styles.actionBtn}
+          >
+            {t("models.connect")}
+          </Button>
+        )}
         <Button
-          type="link"
+          type="default"
           size="small"
           onClick={(e) => {
             e.stopPropagation();
-            setModelManageOpen(true);
+            onOpenModels(provider);
           }}
-          className={styles.configBtn}
-          icon={<AppstoreOutlined />}
+          className={styles.actionBtn}
         >
-          {t("models.manageModels")}
+          {t("models.models")}
         </Button>
         <Button
-          type="link"
+          type="default"
           size="small"
           onClick={(e) => {
             e.stopPropagation();
-            setModalOpen(true);
+            onOpenConfig(provider);
           }}
-          className={styles.configBtn}
-          icon={<EditOutlined />}
+          className={styles.actionBtn}
         >
           {t("models.settings")}
         </Button>
         {provider.is_custom && (
           <Button
-            type="link"
+            type="default"
             size="small"
             danger
             onClick={handleDeleteProvider}
-            icon={<DeleteOutlined />}
+            className={styles.actionBtn}
           >
-            {t("models.deleteProvider")}
+            {t("common.delete")}
           </Button>
         )}
       </div>
 
-      <ProviderConfigModal
-        provider={provider}
-        activeModels={activeModels}
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        onSaved={onSaved}
-      />
-      <ModelManageModal
-        provider={provider}
-        open={modelManageOpen}
-        onClose={() => setModelManageOpen(false)}
-        onSaved={onSaved}
+      <OAuthConfirmModal
+        open={oauthModalOpen}
+        providerId={provider.id}
+        providerName={provider.name}
+        onSuccess={() => {
+          setOauthModalOpen(false);
+          onSaved();
+        }}
+        onCancel={() => setOauthModalOpen(false)}
       />
     </Card>
   );
-}
+});

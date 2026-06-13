@@ -2,39 +2,37 @@
 
 ## Roadmap table
 
-| Area                                  | Item                                                                                                                                             | Status               |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------- |
-| **Horizontal Expansion**              | More channels, models, skills, MCPs — **community contributions welcome**                                                                        | Seeking Contributors |
-| **Existing Feature Extension**        | Display optimization, download hints, Windows path compatibility, etc. — **community contributions welcome**                                     | Seeking Contributors |
-| **Console Web UI**                    | Expose more info/config in the Console                                                                                                           | In Progress          |
-| **Compatibility & Ease of Use**       | App-level packaging (.dmg, .exe)                                                                                                                 | In Progress          |
-| **Self-healing**                      | Magic commands and daemon capabilities (CLI, status, restart, logs)                                                                              | In Progress          |
-|                                       | DaemonAgent: autonomous diagnostics, self-healing, and recovery                                                                                  | Planned              |
-| **Multi-agent**                       | Background task support                                                                                                                          | In Progress          |
-|                                       | Multi-agent isolation                                                                                                                            | Planned              |
-|                                       | Inter-agent contention resolution                                                                                                                | Planned              |
-|                                       | Multi-agent communication                                                                                                                        | Planned              |
-| **Multimodal**                        | Voice/video calls and real-time interaction                                                                                                      | In Progress          |
-| **Release & Contributing**            | Contributing guidance for vibe coding agents                                                                                                     | Planned              |
-| **Bugfixes & Enhancements**           | Skills and MCP runtime install, hot-reload improvements                                                                                          | Planned              |
-| **Security**                          | Shell execution confirmation                                                                                                                     | Planned              |
-|                                       | Tool/skills security                                                                                                                             | Planned              |
-|                                       | Configurable security levels (user-configurable)                                                                                                 | Planned              |
-| **Sandbox**                           | Deeper integration with AgentScope Runtime sandboxes                                                                                             | Long-term planned    |
-| **CoPaw-optimized local models**      | LLMs tuned for CoPaw's native skills and common tasks; better local personal-assistant usability                                                 | Long-term planned    |
-| **Small + large model collaboration** | Local LLMs for sensitive data; cloud LLMs for planning and coding; balance of privacy, performance, and capability                               | Long-term planned    |
-| **Cloud-native**                      | Deeper integration with AgentScope Runtime; leverage cloud compute, storage, and tooling                                                         | Long-term planned    |
-| **Skills Hub**                        | Enrich the [AgentScope Skills](https://github.com/agentscope-ai/agentscope-skills) repository and improve discoverability of high-quality skills | Long-term planned    |
+| Area                           | Item                                                                                                         | Status               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------ | -------------------- |
+| **Horizontal Expansion**       | More channels, models, skills, MCPs — **community contributions welcome**                                    | Seeking Contributors |
+| **Existing Feature Extension** | Display optimization, download hints, Windows path compatibility, etc. — **community contributions welcome** | Seeking Contributors |
+| **Client Experience**          | Install, update, and packaging improvements                                                                  | In Progress          |
+| **Models**                     | Multi-model switching                                                                                        | In Progress          |
+|                                | OAuth                                                                                                        | Planned              |
+|                                | Response API                                                                                                 | Planned              |
+| **Workspace**                  | File access control with Sandbox integration                                                                 | In Progress          |
+|                                | Subfolder layout (config, production files, etc.)                                                            | Planned              |
+| **Coding**                     | LSP, dedicated prompts, workspace versioning, runtime, and supporting infra                                  | In Progress          |
+|                                | Lightweight native APIs                                                                                      | Planned              |
+|                                | Tool self-evolution                                                                                          | Planned              |
+|                                | Compatibility with existing agents (e.g. Claude Code)                                                        | Planned              |
+| **Multi-agent**                | Group chat                                                                                                   | Planned              |
+|                                | Subagent Visualization                                                                                       | Planned              |
+|                                | HiClaw enterprise capabilities                                                                               | Planned              |
+| **Context Management**         | Personal Knowledge Base                                                                                      | In Progress          |
+|                                | User-selectable compression (fine-grained control)                                                           | Planned              |
+| **QwenPaw Application**        | QwenPaw Creator                                                                                              | In Progress          |
+|                                | QwenPaw Insight                                                                                              | In Progress          |
 
-_Status:_ _In Progress_ — actively being worked on; _Planned_ — queued or under design, also **welcome contributions**; _Seeking Contributors_ — we **strongly encourage community contributions**; _Long-term planned_ — longer-horizon roadmap.
+_Status:_ _In Progress_ — actively being worked on; _Planned_ — queued or under design, also welcome contributions; _Seeking Contributors_ — we strongly encourage community contributions.
 
 ---
 
 ## Get involved
 
-We are building CoPaw in the open and welcome contributions of all kinds! Check the table above (especially items marked **Seeking Contributors**) to find areas that interest you, and read [CONTRIBUTING](https://github.com/agentscope-ai/CoPaw/blob/main/CONTRIBUTING.md) to get started. We particularly welcome:
+We are building QwenPaw in the open and welcome contributions of all kinds! Check the table above (especially items marked **Seeking Contributors**) to find areas that interest you, and read [CONTRIBUTING](https://github.com/agentscope-ai/QwenPaw/blob/main/CONTRIBUTING.md) to get started. We particularly welcome:
 
 - **Horizontal expansion** — new channels, model providers, skills, MCPs.
-- **Existing feature extension** — display and UX improvements, download hints, Windows path compatibility, and the like.
+- **Existing feature extension & refinement** — display and interaction improvements, download hints, Windows path compatibility, etc.
 
-Join the conversation on [GitHub Discussions](https://github.com/agentscope-ai/CoPaw/discussions) to suggest or pick up work.
+Join the conversation on [GitHub Issue - Open Tasks](https://github.com/agentscope-ai/QwenPaw/issues/2291) to suggest or pick up work.

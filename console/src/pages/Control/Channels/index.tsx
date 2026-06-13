@@ -1,30 +1,51 @@
-import { useMemo, useState } from "react";
-import { Form, message } from "@agentscope-ai/design";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Form } from "@agentscope-ai/design";
+import { Badge, Button, Space } from "antd";
+import { SafetyOutlined, AuditOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-
 import api from "../../../api";
 import {
   ChannelCard,
   ChannelDrawer,
+  AccessControlDrawer,
+  PendingApprovalsDrawer,
   useChannels,
   getChannelLabel,
   type ChannelKey,
 } from "./components";
+import { PageHeader } from "@/components/PageHeader";
+import { useAppMessage } from "../../../hooks/useAppMessage";
 import styles from "./index.module.less";
 
 type FilterType = "all" | "builtin" | "custom";
 
 function ChannelsPage() {
   const { t } = useTranslation();
+  const { message } = useAppMessage();
   const { channels, orderedKeys, isBuiltin, loading, fetchChannels } =
     useChannels();
   const [filter, setFilter] = useState<FilterType>("all");
   const [saving, setSaving] = useState(false);
-  const [hoverKey, setHoverKey] = useState<ChannelKey | null>(null);
   const [activeKey, setActiveKey] = useState<ChannelKey | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [aclDrawerOpen, setAclDrawerOpen] = useState(false);
+  const [pendingDrawerOpen, setPendingDrawerOpen] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [form] = Form.useForm<any>();
+
+  const fetchPendingCount = useCallback(async () => {
+    try {
+      const data = await api.getAclAllPending();
+      setPendingCount(data.length);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchPendingCount();
+  }, [fetchPendingCount]);
 
   // Sort cards: enabled first, then disabled (preserve orderedKeys order within each group)
   const cards = useMemo(() => {
@@ -54,8 +75,17 @@ function ChannelsPage() {
     setActiveKey(key);
     setDrawerOpen(true);
     const channelConfig = channels[key] || { enabled: false, bot_prefix: "" };
+    // Migrate legacy allowlist policy to new access control fields
+    const accessControlDm =
+      channelConfig.access_control_dm ||
+      channelConfig.dm_policy === "allowlist";
+    const accessControlGroup =
+      channelConfig.access_control_group ||
+      channelConfig.group_policy === "allowlist";
     form.setFieldsValue({
       ...channelConfig,
+      access_control_dm: accessControlDm,
+      access_control_group: accessControlGroup,
       filter_tool_messages: !channelConfig.filter_tool_messages,
       filter_thinking: !channelConfig.filter_thinking,
     });
@@ -98,7 +128,7 @@ function ChannelsPage() {
     }
   };
 
-  const activeLabel = activeKey ? getChannelLabel(activeKey) : "";
+  const activeLabel = activeKey ? getChannelLabel(activeKey, t) : "";
 
   const FILTER_TABS: { key: FilterType; label: string }[] = [
     { key: "all", label: t("channels.filterAll") },
@@ -108,46 +138,60 @@ function ChannelsPage() {
 
   return (
     <div className={styles.channelsPage}>
-      <div className={styles.pageHeader}>
-        <div>
-          <h1 className={styles.title}>{t("channels.title")}</h1>
-          <p className={styles.description}>{t("channels.description")}</p>
-        </div>
-        <div className={styles.filterTabs}>
-          {FILTER_TABS.map(({ key, label }) => (
-            <button
-              key={key}
-              className={`${styles.filterTab} ${
-                filter === key ? styles.filterTabActive : ""
-              }`}
-              onClick={() => setFilter(key)}
+      <PageHeader
+        items={[{ title: t("nav.control") }, { title: t("channels.title") }]}
+        center={
+          <div className={styles.filterTabs}>
+            {FILTER_TABS.map(({ key, label }) => (
+              <button
+                key={key}
+                className={`${styles.filterTab} ${
+                  filter === key ? styles.filterTabActive : ""
+                }`}
+                onClick={() => setFilter(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        }
+        extra={
+          <Space size={8}>
+            <Badge dot={pendingCount > 0} offset={[-4, 4]}>
+              <Button
+                icon={<AuditOutlined />}
+                onClick={() => setPendingDrawerOpen(true)}
+              >
+                {t("channels.pendingApprovals")}
+              </Button>
+            </Badge>
+            <Button
+              icon={<SafetyOutlined />}
+              onClick={() => setAclDrawerOpen(true)}
             >
-              {label}
-            </button>
-          ))}
-        </div>
+              {t("channels.manageAccessControl")}
+            </Button>
+          </Space>
+        }
+      />
+      <div className={styles.channelsContainer}>
+        {loading ? (
+          <div className={styles.loading}>
+            <span className={styles.loadingText}>{t("channels.loading")}</span>
+          </div>
+        ) : (
+          <div className={styles.channelsGrid}>
+            {cards.map(({ key, config }) => (
+              <ChannelCard
+                key={key}
+                channelKey={key}
+                config={config}
+                onClick={() => handleCardClick(key)}
+              />
+            ))}
+          </div>
+        )}
       </div>
-
-      {loading ? (
-        <div className={styles.loading}>
-          <span className={styles.loadingText}>{t("channels.loading")}</span>
-        </div>
-      ) : (
-        <div className={styles.channelsGrid}>
-          {cards.map(({ key, config }) => (
-            <ChannelCard
-              key={key}
-              channelKey={key}
-              config={config}
-              isHover={hoverKey === key}
-              onClick={() => handleCardClick(key)}
-              onMouseEnter={() => setHoverKey(key)}
-              onMouseLeave={() => setHoverKey(null)}
-            />
-          ))}
-        </div>
-      )}
-
       <ChannelDrawer
         open={drawerOpen}
         activeKey={activeKey}
@@ -158,6 +202,17 @@ function ChannelsPage() {
         isBuiltin={activeKey ? isBuiltin(activeKey) : true}
         onClose={handleDrawerClose}
         onSubmit={handleSubmit}
+      />
+      <AccessControlDrawer
+        open={aclDrawerOpen}
+        onClose={() => setAclDrawerOpen(false)}
+      />
+      <PendingApprovalsDrawer
+        open={pendingDrawerOpen}
+        onClose={() => {
+          setPendingDrawerOpen(false);
+          fetchPendingCount();
+        }}
       />
     </div>
   );
